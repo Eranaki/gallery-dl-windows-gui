@@ -1,8 +1,7 @@
-from app.models.task import DownloadTask, MediaScope, TaskMode, TaskOptions, TaskStatus
+from app.models.task import DownloadTask, TaskMode, TaskOptions, TaskStatus
 
 __all__ = [
     "DownloadTask",
-    "MediaScope",
     "TaskMode",
     "TaskOptions",
     "TaskStatus",

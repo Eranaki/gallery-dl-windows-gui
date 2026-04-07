@@ -36,27 +36,17 @@ class TaskStatus(str, Enum):
         return labels[self]
 
 
-class MediaScope(str, Enum):
-    ALL = "all"
-    IMAGES = "images"
-    VIDEOS = "videos"
-
-    @property
-    def label(self) -> str:
-        labels = {
-            MediaScope.ALL: "\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f \u0438 \u0432\u0438\u0434\u0435\u043e",
-            MediaScope.IMAGES: "\u0422\u043e\u043b\u044c\u043a\u043e \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f",
-            MediaScope.VIDEOS: "\u0422\u043e\u043b\u044c\u043a\u043e \u0432\u0438\u0434\u0435\u043e",
-        }
-        return labels[self]
-
-
 @dataclass(slots=True)
 class TaskOptions:
     destination: str
     organize_by_site: bool = True
     only_new: bool = True
-    media_scope: MediaScope = MediaScope.ALL
+    include_images: bool = True
+    include_videos: bool = True
+    include_archives: bool = False
+    custom_extensions: str = ""
+    base_directory: str = ""
+    directory_template: str = ""
     range_text: str = ""
     date_after: str = ""
     username: str = ""
@@ -64,6 +54,12 @@ class TaskOptions:
     cookies_file: str = ""
     cookies_from_browser: str = ""
     filename_template: str = ""
+    use_original_filenames: bool = False
+    path_compatibility_mode: str = "auto"
+    path_restrict: str = ""
+    path_replace: str = ""
+    path_remove: str = ""
+    path_strip: str = ""
     write_metadata: bool = False
     write_info_json: bool = False
     write_tags: bool = False

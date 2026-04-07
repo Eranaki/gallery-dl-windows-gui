@@ -10,6 +10,19 @@ class AppSettings:
     gallery_dl_path: str = "gallery-dl"
     default_download_dir: str = str(Path.home() / "Downloads")
     last_cookies_browser: str = ""
+    include_images: bool = True
+    include_videos: bool = True
+    include_archives: bool = False
+    custom_extensions: str = ""
+    naming_base_directory: str = ""
+    naming_directory_template: str = ""
+    naming_filename_template: str = ""
+    naming_use_original_filenames: bool = False
+    naming_path_compatibility_mode: str = "auto"
+    naming_path_restrict: str = ""
+    naming_path_replace: str = ""
+    naming_path_remove: str = ""
+    naming_path_strip: str = ""
 
 
 class SettingsService:

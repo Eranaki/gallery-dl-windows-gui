@@ -37,6 +37,29 @@ Or directly:
 .\.venv\Scripts\python.exe main.py
 ```
 
+## Build EXE
+
+```powershell
+.\build_exe.cmd
+```
+
+The packaged application will be created in:
+
+```text
+dist\gallery-dl-windows-gui\
+```
+
+Main files after build:
+
+```text
+dist\gallery-dl-windows-gui\gallery-dl-windows-gui.exe
+dist\gallery-dl-windows-gui\gallery-dl-windows-gui-cli.exe
+```
+
+The GUI starts from `gallery-dl-windows-gui.exe`. The companion CLI EXE is
+used internally so the packaged app can run bundled `gallery-dl` commands
+without requiring a separate system Python installation.
+
 ## Current MVP limits
 
 - tasks run one after another;

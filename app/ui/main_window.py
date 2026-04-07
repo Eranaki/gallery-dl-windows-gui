@@ -10,6 +10,8 @@ from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QFileDialog,
     QFormLayout,
@@ -39,13 +41,20 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.supported_sites import SupportedSiteEntry, SupportedSitesPayload
-from app.models.task import DownloadTask, MediaScope, TaskMode, TaskOptions, TaskStatus
+from app.models.task import DownloadTask, TaskMode, TaskOptions, TaskStatus
 from app.services.gallery_dl_runner import GalleryDlRunner
+from app.services.naming_service import (
+    NAMING_PRESETS,
+    build_common_keywords_text,
+    build_path_preview,
+    get_preset_by_id,
+)
 from app.services.settings_service import AppSettings, SettingsService
 from app.services.supported_sites_service import DEFAULT_SECTION, SupportedSitesService
 
 
 SUPPORTED_SITES_DOCK_WIDTH = 440
+ARCHIVE_EXTENSIONS_HINT = ".zip, .rar, .7z, .tar, .gz, .bz2, .xz, .tgz, .tbz2, .txz, .cbz, .cbr, .cb7, .cbt, .zst ..."
 
 
 class MainWindow(QMainWindow):
@@ -133,18 +142,98 @@ class MainWindow(QMainWindow):
         self.only_new_check.setChecked(True)
         self.organize_by_site_check = QCheckBox("\u0421\u043e\u0437\u0434\u0430\u0432\u0430\u0442\u044c \u043f\u0430\u043f\u043a\u0438 \u043f\u043e \u0441\u0430\u0439\u0442\u0443")
         self.organize_by_site_check.setChecked(True)
-        self.media_scope_combo = QComboBox()
-        self.media_scope_combo.addItems([scope.label for scope in MediaScope])
+        self.include_images_check = QCheckBox("\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f")
+        self.include_images_check.setChecked(self.app_settings.include_images)
+        self.include_videos_check = QCheckBox("\u0412\u0438\u0434\u0435\u043e")
+        self.include_videos_check.setChecked(self.app_settings.include_videos)
+        self.include_archives_check = QCheckBox("\u0410\u0440\u0445\u0438\u0432\u044b")
+        self.include_archives_check.setChecked(self.app_settings.include_archives)
+        self.include_archives_check.setToolTip(
+            "\u041e\u0441\u043d\u043e\u0432\u043d\u044b\u0435 \u0430\u0440\u0445\u0438\u0432\u043d\u044b\u0435 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0438\u044f: "
+            + ARCHIVE_EXTENSIONS_HINT
+        )
+        self.include_custom_extensions_check = QCheckBox("\u0421\u0432\u043e\u0435")
+        self.custom_extensions_edit = QLineEdit(self.app_settings.custom_extensions)
+        self.custom_extensions_edit.setPlaceholderText(".psd, .epub, .pdf")
         self.range_edit = QLineEdit()
-        self.range_edit.setPlaceholderText("\u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: 1:20 \u0438\u043b\u0438 5-30")
+        self.range_edit.setPlaceholderText("5, 1-20, 1:20, 1:24:3")
+        self.range_edit.setToolTip(
+            "\u041f\u043e\u0437\u0432\u043e\u043b\u044f\u0435\u0442 \u0441\u043a\u0430\u0447\u0430\u0442\u044c \u0442\u043e\u043b\u044c\u043a\u043e \u0447\u0430\u0441\u0442\u044c \u0444\u0430\u0439\u043b\u043e\u0432 "
+            "\u043f\u043e \u043f\u043e\u0440\u044f\u0434\u043a\u043e\u0432\u044b\u043c \u043d\u043e\u043c\u0435\u0440\u0430\u043c."
+        )
+        if self.app_settings.custom_extensions.strip():
+            self.include_custom_extensions_check.setChecked(True)
+
+        file_types_widget = QWidget()
+        file_types_layout = QHBoxLayout(file_types_widget)
+        file_types_layout.setContentsMargins(0, 0, 0, 0)
+        file_types_layout.addWidget(self.include_images_check)
+        file_types_layout.addWidget(self.include_videos_check)
+        file_types_layout.addWidget(self.include_archives_check)
+        file_types_layout.addWidget(self.include_custom_extensions_check)
+        file_types_layout.addWidget(self.custom_extensions_edit, 1)
 
         quick_layout.addWidget(self.only_new_check, 0, 0)
         quick_layout.addWidget(self.organize_by_site_check, 0, 1)
-        quick_layout.addWidget(QLabel("\u0422\u0438\u043f \u0444\u0430\u0439\u043b\u043e\u0432:"), 1, 0)
-        quick_layout.addWidget(self.media_scope_combo, 1, 1)
-        quick_layout.addWidget(QLabel("\u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d:"), 1, 2)
-        quick_layout.addWidget(self.range_edit, 1, 3)
+        quick_layout.addWidget(QLabel("\u0422\u0438\u043f\u044b \u0444\u0430\u0439\u043b\u043e\u0432:"), 1, 0)
+        quick_layout.addWidget(file_types_widget, 1, 1, 1, 3)
+        quick_layout.addWidget(QLabel("\u041a\u0430\u043a\u0438\u0435 \u044d\u043b\u0435\u043c\u0435\u043d\u0442\u044b \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u0442\u044c:"), 2, 0)
+        quick_layout.addWidget(self.range_edit, 2, 1, 1, 3)
         top_layout.addLayout(quick_layout)
+
+        naming_group = QGroupBox("\u0418\u043c\u0435\u043d\u043e\u0432\u0430\u043d\u0438\u0435")
+        naming_layout = QGridLayout(naming_group)
+        self.naming_preset_combo = QComboBox()
+        self.naming_preset_combo.addItem(
+            "\u041f\u0440\u0435\u0441\u0435\u0442 \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d",
+            "",
+        )
+        for preset in NAMING_PRESETS:
+            self.naming_preset_combo.addItem(preset.label, preset.id)
+        self.naming_apply_preset_button = QPushButton("\u041f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c")
+        self.naming_fields_button = QPushButton("\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f")
+        self.naming_advanced_button = QPushButton("\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430")
+
+        self.naming_directory_edit = QLineEdit(self.app_settings.naming_directory_template)
+        self.naming_directory_edit.setPlaceholderText(
+            "\u041f\u0443\u0441\u0442\u043e = \u043a\u0430\u043a \u0443 gallery-dl, \u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: {category}/{user[id]}"
+        )
+        self.naming_filename_quick_edit = QLineEdit(self.app_settings.naming_filename_template)
+        self.naming_filename_quick_edit.setPlaceholderText(
+            "\u041f\u0443\u0441\u0442\u043e = \u043a\u0430\u043a \u0443 gallery-dl, \u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: {title}.{extension}"
+        )
+        self.use_original_filenames_check = QCheckBox(
+            "\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0435 \u0438\u043c\u0435\u043d\u0430"
+        )
+        self.use_original_filenames_check.setChecked(self.app_settings.naming_use_original_filenames)
+        self.path_compatibility_combo = QComboBox()
+        self.path_compatibility_combo.addItem("\u0410\u0432\u0442\u043e", "auto")
+        self.path_compatibility_combo.addItem("Windows-safe", "windows")
+        self.path_compatibility_combo.addItem("ASCII-safe", "ascii")
+        self._set_combo_value(
+            self.path_compatibility_combo,
+            self.app_settings.naming_path_compatibility_mode or "auto",
+        )
+
+        self.naming_preview_label = QLabel("-")
+        self.naming_preview_label.setWordWrap(True)
+        self.naming_preview_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        naming_layout.addWidget(QLabel("\u041f\u0440\u0435\u0441\u0435\u0442:"), 0, 0)
+        naming_layout.addWidget(self.naming_preset_combo, 0, 1)
+        naming_layout.addWidget(self.naming_apply_preset_button, 0, 2)
+        naming_layout.addWidget(self.naming_fields_button, 0, 3)
+        naming_layout.addWidget(self.naming_advanced_button, 0, 4)
+        naming_layout.addWidget(QLabel("\u0421\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430 \u043f\u0430\u043f\u043e\u043a:"), 1, 0)
+        naming_layout.addWidget(self.naming_directory_edit, 1, 1, 1, 4)
+        naming_layout.addWidget(QLabel("\u0418\u043c\u044f \u0444\u0430\u0439\u043b\u0430:"), 2, 0)
+        naming_layout.addWidget(self.naming_filename_quick_edit, 2, 1, 1, 4)
+        naming_layout.addWidget(self.use_original_filenames_check, 3, 0, 1, 2)
+        naming_layout.addWidget(QLabel("\u0421\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c \u0438\u043c\u0435\u043d:"), 3, 2)
+        naming_layout.addWidget(self.path_compatibility_combo, 3, 3, 1, 2)
+        naming_layout.addWidget(QLabel("\u041f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u043f\u0443\u0442\u0438:"), 4, 0)
+        naming_layout.addWidget(self.naming_preview_label, 4, 1, 1, 4)
+        top_layout.addWidget(naming_group)
 
         actions_layout = QHBoxLayout()
         self.paste_button = QPushButton("\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044c")
@@ -314,9 +403,26 @@ class MainWindow(QMainWindow):
 
         naming_group = QGroupBox("\u0418\u043c\u0435\u043d\u0430 \u0444\u0430\u0439\u043b\u043e\u0432")
         naming_form = QFormLayout(naming_group)
-        self.filename_template_edit = QLineEdit()
+        self.filename_template_edit = QLineEdit(self.app_settings.naming_filename_template)
         self.filename_template_edit.setPlaceholderText("{filename}.{extension}")
+        self.base_directory_edit = QLineEdit(self.app_settings.naming_base_directory)
+        self.base_directory_edit.setPlaceholderText(
+            "\u041f\u0443\u0441\u0442\u043e = \u0431\u0440\u0430\u0442\u044c \u043e\u0441\u043d\u043e\u0432\u043d\u0443\u044e \u043f\u0430\u043f\u043a\u0443 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438"
+        )
+        self.path_restrict_edit = QLineEdit(self.app_settings.naming_path_restrict)
+        self.path_restrict_edit.setPlaceholderText("auto / windows / ascii")
+        self.path_replace_edit = QLineEdit(self.app_settings.naming_path_replace)
+        self.path_replace_edit.setPlaceholderText("_")
+        self.path_remove_edit = QLineEdit(self.app_settings.naming_path_remove)
+        self.path_remove_edit.setPlaceholderText("\\x00-\\x1f\\x7f")
+        self.path_strip_edit = QLineEdit(self.app_settings.naming_path_strip)
+        self.path_strip_edit.setPlaceholderText(". ")
         naming_form.addRow("\u0428\u0430\u0431\u043b\u043e\u043d \u0438\u043c\u0435\u043d\u0438:", self.filename_template_edit)
+        naming_form.addRow("Base directory:", self.base_directory_edit)
+        naming_form.addRow("Path restrict:", self.path_restrict_edit)
+        naming_form.addRow("Path replace:", self.path_replace_edit)
+        naming_form.addRow("Path remove:", self.path_remove_edit)
+        naming_form.addRow("Path strip:", self.path_strip_edit)
 
         post_group = QGroupBox("\u041f\u043e\u0441\u043b\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438")
         post_form = QFormLayout(post_group)
@@ -440,6 +546,15 @@ class MainWindow(QMainWindow):
         toggle_advanced.triggered.connect(self._toggle_advanced)
         self.menuBar().addAction(toggle_advanced)
 
+    def _set_combo_value(self, combo: QComboBox, value: str) -> None:
+        for index in range(combo.count()):
+            if combo.itemData(index) == value:
+                combo.setCurrentIndex(index)
+                return
+
+    def _selected_naming_compatibility(self) -> str:
+        return str(self.path_compatibility_combo.currentData() or "auto")
+
     def _wire_signals(self) -> None:
         self.paste_button.clicked.connect(self._paste_urls)
         self.clear_button.clicked.connect(self.urls_edit.clear)
@@ -455,6 +570,30 @@ class MainWindow(QMainWindow):
         self.default_folder_button.clicked.connect(self._choose_default_folder)
         self.save_settings_button.clicked.connect(self._save_settings)
         self.cookies_file_button.clicked.connect(self._choose_cookies_file)
+        self.naming_apply_preset_button.clicked.connect(self._apply_naming_preset)
+        self.naming_fields_button.clicked.connect(self._show_available_fields)
+        self.naming_advanced_button.clicked.connect(self._open_advanced_naming)
+        self.use_original_filenames_check.toggled.connect(self._sync_filename_state)
+        self.include_custom_extensions_check.toggled.connect(self._sync_custom_extensions_state)
+        self.naming_filename_quick_edit.textChanged.connect(self._sync_filename_template_from_quick)
+        self.filename_template_edit.textChanged.connect(self._sync_filename_template_from_advanced)
+
+        preview_signals = (
+            self.urls_edit.textChanged,
+            self.destination_edit.textChanged,
+            self.naming_directory_edit.textChanged,
+            self.naming_filename_quick_edit.textChanged,
+            self.use_original_filenames_check.toggled,
+            self.path_compatibility_combo.currentIndexChanged,
+            self.organize_by_site_check.toggled,
+            self.base_directory_edit.textChanged,
+            self.path_restrict_edit.textChanged,
+            self.path_replace_edit.textChanged,
+            self.path_remove_edit.textChanged,
+            self.path_strip_edit.textChanged,
+        )
+        for signal in preview_signals:
+            signal.connect(self._update_naming_preview)
 
         self.supported_sites_search_edit.textChanged.connect(self._filter_supported_sites)
         self.supported_sites_tree.currentItemChanged.connect(self._on_supported_site_selected)
@@ -464,6 +603,9 @@ class MainWindow(QMainWindow):
         self.runner.task_output.connect(self._append_log)
         self.runner.queue_state_changed.connect(self._update_queue_state)
         self.runner.current_task_changed.connect(self._update_current_task_banner)
+        self._sync_custom_extensions_state()
+        self._sync_filename_state()
+        self._update_naming_preview()
 
     def _toggle_advanced(self) -> None:
         visible = self.advanced_dock.isVisible()
@@ -481,6 +623,125 @@ class MainWindow(QMainWindow):
         visible = self.log_panel.isVisible()
         self.log_panel.setVisible(not visible)
         self.log_toggle_button.setText("\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c" if visible else "\u0421\u043a\u0440\u044b\u0442\u044c")
+
+    def _sync_filename_state(self) -> None:
+        use_original = self.use_original_filenames_check.isChecked()
+        self.naming_filename_quick_edit.setEnabled(not use_original)
+        self.filename_template_edit.setEnabled(not use_original)
+        if use_original:
+            self.naming_filename_quick_edit.setPlaceholderText(
+                "\u0412\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u043e: \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u044e\u0442\u0441\u044f \u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0435 \u0438\u043c\u0435\u043d\u0430"
+            )
+        else:
+            self.naming_filename_quick_edit.setPlaceholderText(
+                "\u041f\u0443\u0441\u0442\u043e = \u043a\u0430\u043a \u0443 gallery-dl, \u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: {title}.{extension}"
+            )
+        self._update_naming_preview()
+
+    def _sync_custom_extensions_state(self) -> None:
+        enabled = self.include_custom_extensions_check.isChecked()
+        self.custom_extensions_edit.setEnabled(enabled)
+
+    def _sync_filename_template_from_quick(self, value: str) -> None:
+        if self.filename_template_edit.text() != value:
+            self.filename_template_edit.blockSignals(True)
+            self.filename_template_edit.setText(value)
+            self.filename_template_edit.blockSignals(False)
+
+    def _sync_filename_template_from_advanced(self, value: str) -> None:
+        if self.naming_filename_quick_edit.text() != value:
+            self.naming_filename_quick_edit.blockSignals(True)
+            self.naming_filename_quick_edit.setText(value)
+            self.naming_filename_quick_edit.blockSignals(False)
+        self._update_naming_preview()
+
+    def _apply_naming_preset(self) -> None:
+        preset_id = str(self.naming_preset_combo.currentData() or "")
+        preset = get_preset_by_id(preset_id)
+        if preset is None:
+            return
+        self.naming_directory_edit.setText(preset.directory_template)
+        self.naming_filename_quick_edit.setText(preset.filename_template)
+        self.use_original_filenames_check.setChecked(preset.use_original_filenames)
+        self.status_message.setText(preset.description)
+        self._update_naming_preview()
+
+    def _open_advanced_naming(self) -> None:
+        self.advanced_dock.show()
+        self.advanced_dock.raise_()
+        self.base_directory_edit.setFocus()
+
+    def _show_available_fields(self) -> None:
+        urls = [line.strip() for line in self.urls_edit.toPlainText().splitlines() if line.strip()]
+        if not urls:
+            self._show_readonly_text_dialog(
+                "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f",
+                build_common_keywords_text(),
+            )
+            return
+
+        success, output = self.runner.inspect_keywords(urls[0])
+        if success:
+            self._show_readonly_text_dialog(
+                "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f",
+                output,
+            )
+            return
+
+        text = (
+            "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0442\u043e\u0447\u043d\u044b\u0435 keywords \u043e\u0442 gallery-dl.\n\n"
+            f"{output}\n\n"
+            f"{build_common_keywords_text(urls[0])}"
+        )
+        self._show_readonly_text_dialog(
+            "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f",
+            text,
+        )
+
+    def _show_readonly_text_dialog(self, title: str, text: str) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(760, 520)
+        layout = QVBoxLayout(dialog)
+        editor = QPlainTextEdit()
+        editor.setReadOnly(True)
+        editor.setPlainText(text)
+        layout.addWidget(editor)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def _update_naming_preview(self) -> None:
+        url = ""
+        for line in self.urls_edit.toPlainText().splitlines():
+            stripped = line.strip()
+            if stripped:
+                url = stripped
+                break
+
+        preview, error = build_path_preview(
+            destination=self.destination_edit.text().strip() or self.app_settings.default_download_dir,
+            url=url,
+            directory_template=self.naming_directory_edit.text().strip(),
+            filename_template=self.naming_filename_quick_edit.text().strip(),
+            use_original_filenames=self.use_original_filenames_check.isChecked(),
+            path_compatibility_mode=self.path_restrict_edit.text().strip() or self._selected_naming_compatibility(),
+            organize_by_site=self.organize_by_site_check.isChecked(),
+            base_directory=self.base_directory_edit.text().strip(),
+            path_replace=self.path_replace_edit.text(),
+            path_remove=self.path_remove_edit.text(),
+            path_strip=self.path_strip_edit.text(),
+        )
+        if error:
+            self.naming_preview_label.setText(f"\u041e\u0448\u0438\u0431\u043a\u0430 preview: {error}")
+            self.naming_preview_label.setStyleSheet("color: #b00020;")
+            return
+
+        self.naming_preview_label.setText(preview or "-")
+        self.naming_preview_label.setStyleSheet("")
 
     def _initialize_supported_sites(self) -> None:
         cached = self.supported_sites_service.load_cached()
@@ -720,6 +981,19 @@ class MainWindow(QMainWindow):
             gallery_dl_path=self.gallery_dl_path_edit.text().strip() or "gallery-dl",
             default_download_dir=self.default_folder_edit.text().strip() or str(Path.home() / "Downloads"),
             last_cookies_browser=self.browser_cookies_edit.text().strip(),
+            include_images=self.include_images_check.isChecked(),
+            include_videos=self.include_videos_check.isChecked(),
+            include_archives=self.include_archives_check.isChecked(),
+            custom_extensions=self.custom_extensions_edit.text().strip() if self.include_custom_extensions_check.isChecked() else "",
+            naming_base_directory=self.base_directory_edit.text().strip(),
+            naming_directory_template=self.naming_directory_edit.text().strip(),
+            naming_filename_template=self.naming_filename_quick_edit.text().strip(),
+            naming_use_original_filenames=self.use_original_filenames_check.isChecked(),
+            naming_path_compatibility_mode=self._selected_naming_compatibility(),
+            naming_path_restrict=self.path_restrict_edit.text().strip(),
+            naming_path_replace=self.path_replace_edit.text(),
+            naming_path_remove=self.path_remove_edit.text(),
+            naming_path_strip=self.path_strip_edit.text(),
         )
         self.settings_service.save(self.app_settings)
         self.runner.set_gallery_dl_path(self.app_settings.gallery_dl_path)
@@ -746,27 +1020,45 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if not self._has_selected_file_types():
+            QMessageBox.warning(
+                self,
+                "\u041d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u044b \u0442\u0438\u043f\u044b \u0444\u0430\u0439\u043b\u043e\u0432",
+                "\u041e\u0442\u043c\u0435\u0442\u044c \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u0438\u043d \u0442\u0438\u043f \u0444\u0430\u0439\u043b\u043e\u0432 \u0438\u043b\u0438 \u0443\u043a\u0430\u0436\u0438 \u0441\u0432\u043e\u0438 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0438\u044f.",
+            )
+            return
+
         options = self._collect_task_options(destination)
         tasks = [DownloadTask(url=url, mode=mode, options=options) for url in urls]
         self.runner.enqueue(tasks)
         self.status_message.setText(f"\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0437\u0430\u0434\u0430\u0447: {len(tasks)}")
 
     def _collect_task_options(self, destination: str) -> TaskOptions:
-        media_scope = list(MediaScope)[self.media_scope_combo.currentIndex()]
         archive_map = {0: "none", 1: "zip", 2: "cbz"}
         ugoira_map = {0: "none", 1: "webm", 2: "mp4", 3: "gif", 4: "copy", 5: "zip"}
         return TaskOptions(
             destination=destination,
             organize_by_site=self.organize_by_site_check.isChecked(),
             only_new=self.only_new_check.isChecked(),
-            media_scope=media_scope,
+            include_images=self.include_images_check.isChecked(),
+            include_videos=self.include_videos_check.isChecked(),
+            include_archives=self.include_archives_check.isChecked(),
+            custom_extensions=self.custom_extensions_edit.text().strip() if self.include_custom_extensions_check.isChecked() else "",
+            base_directory=self.base_directory_edit.text().strip(),
+            directory_template=self.naming_directory_edit.text().strip(),
             range_text=self.range_edit.text().strip(),
             date_after=self.date_after_edit.text().strip(),
             username=self.username_edit.text().strip(),
             password=self.password_edit.text(),
             cookies_file=self.cookies_file_edit.text().strip(),
             cookies_from_browser=self.browser_cookies_edit.text().strip(),
-            filename_template=self.filename_template_edit.text().strip(),
+            filename_template=self.naming_filename_quick_edit.text().strip(),
+            use_original_filenames=self.use_original_filenames_check.isChecked(),
+            path_compatibility_mode=self._selected_naming_compatibility(),
+            path_restrict=self.path_restrict_edit.text().strip(),
+            path_replace=self.path_replace_edit.text(),
+            path_remove=self.path_remove_edit.text(),
+            path_strip=self.path_strip_edit.text(),
             write_metadata=self.write_metadata_check.isChecked(),
             write_info_json=self.write_info_json_check.isChecked(),
             write_tags=self.write_tags_check.isChecked(),
@@ -775,6 +1067,16 @@ class MainWindow(QMainWindow):
             proxy_url=self.proxy_edit.text().strip(),
             retries=self.retries_edit.text().strip(),
             timeout=self.timeout_edit.text().strip(),
+        )
+
+    def _has_selected_file_types(self) -> bool:
+        return any(
+            (
+                self.include_images_check.isChecked(),
+                self.include_videos_check.isChecked(),
+                self.include_archives_check.isChecked(),
+                self.include_custom_extensions_check.isChecked() and self.custom_extensions_edit.text().strip(),
+            )
         )
 
     def _upsert_task(self, task: DownloadTask) -> None:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shlex
 import shutil
+import subprocess
 import sys
 from collections import deque
 from dataclasses import dataclass
@@ -10,11 +12,17 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, Signal
 
-from app.models.task import DownloadTask, MediaScope, TaskMode, TaskStatus
+from app.models.task import DownloadTask, TaskMode, TaskStatus
+from app.services.naming_service import split_directory_template
 
 
 IMAGE_EXTENSIONS = ("jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "avif", "jxl")
 VIDEO_EXTENSIONS = ("mp4", "mkv", "webm", "avi", "mov", "wmv", "m4v", "flv")
+ARCHIVE_EXTENSIONS = (
+    "7z", "ace", "apk", "arj", "bz2", "cab", "cb7", "cbr", "cbt", "cbz",
+    "cpio", "gz", "iso", "jar", "lz", "lzma", "rar", "tar", "tbz", "tbz2",
+    "tgz", "txz", "war", "xz", "zip", "zst",
+)
 
 
 @dataclass(slots=True)
@@ -43,6 +51,32 @@ class GalleryDlRunner(QObject):
 
     def set_gallery_dl_path(self, gallery_dl_path: str) -> None:
         self._gallery_dl_path = gallery_dl_path
+
+    def inspect_keywords(self, url: str) -> tuple[bool, str]:
+        command = self._resolve_command()
+        if command is None:
+            return False, "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043d\u0430\u0439\u0442\u0438 gallery-dl."
+
+        try:
+            result = subprocess.run(
+                [command.program, *command.prefix_args, "--no-colors", "--list-keywords", url],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=45,
+                check=False,
+            )
+        except Exception as exc:
+            return False, str(exc)
+
+        output = (result.stdout or "").strip()
+        error_output = (result.stderr or "").strip()
+        if result.returncode == 0 and output:
+            return True, output
+        if error_output:
+            return False, error_output
+        return False, output or "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043b\u0435\u0439."
 
     def enqueue(self, tasks: list[DownloadTask]) -> None:
         for task in tasks:
@@ -98,6 +132,9 @@ class GalleryDlRunner(QObject):
         self._process.start()
 
     def _resolve_command(self) -> ResolvedCommand | None:
+        if resolved := self._resolve_frozen_executable():
+            return resolved
+
         candidate = self._gallery_dl_path.strip()
 
         if candidate:
@@ -113,6 +150,17 @@ class GalleryDlRunner(QObject):
         if resolved := self._resolve_python_module():
             return resolved
 
+        return None
+
+    def _resolve_frozen_executable(self) -> ResolvedCommand | None:
+        if getattr(sys, "frozen", False):
+            cli_proxy = Path(sys.executable).with_name("gallery-dl-windows-gui-cli.exe")
+            program = str(cli_proxy) if cli_proxy.exists() else sys.executable
+            return ResolvedCommand(
+                program=program,
+                prefix_args=["--internal-gallery-dl"],
+                display=f"{program} --internal-gallery-dl",
+            )
         return None
 
     def _resolve_explicit_command(self, candidate: str) -> ResolvedCommand | None:
@@ -165,10 +213,11 @@ class GalleryDlRunner(QObject):
         if task.mode is TaskMode.CHECK:
             args.append("--simulate")
 
-        if opts.organize_by_site:
-            args.extend(["-d", opts.destination])
-        else:
+        base_directory = opts.base_directory.strip() or opts.destination
+        if self._should_use_exact_directory(opts):
             args.extend(["-D", opts.destination])
+        else:
+            args.extend(["-d", base_directory])
 
         if not opts.only_new:
             args.append("--no-skip")
@@ -188,8 +237,24 @@ class GalleryDlRunner(QObject):
         if opts.cookies_from_browser.strip():
             args.extend(["--cookies-from-browser", opts.cookies_from_browser.strip()])
 
-        if opts.filename_template.strip():
+        if opts.use_original_filenames:
+            args.extend(["-f", "/O"])
+        elif opts.filename_template.strip():
             args.extend(["-f", opts.filename_template.strip()])
+
+        directory_segments = split_directory_template(opts.directory_template)
+        if directory_segments:
+            args.extend(["-o", f"directory={json.dumps(directory_segments, ensure_ascii=False)}"])
+
+        path_restrict = opts.path_restrict.strip() or opts.path_compatibility_mode.strip()
+        if path_restrict and path_restrict != "auto":
+            args.extend(["-o", f"path-restrict={path_restrict}"])
+        if opts.path_replace:
+            args.extend(["-o", f"path-replace={opts.path_replace}"])
+        if opts.path_remove:
+            args.extend(["-o", f"path-remove={opts.path_remove}"])
+        if opts.path_strip:
+            args.extend(["-o", f"path-strip={opts.path_strip}"])
 
         if opts.write_metadata:
             args.append("--write-metadata")
@@ -213,19 +278,54 @@ class GalleryDlRunner(QObject):
         if opts.timeout.strip():
             args.extend(["--http-timeout", opts.timeout.strip()])
 
-        media_filter = self._build_media_filter(opts.media_scope)
+        media_filter = self._build_media_filter(
+            include_images=opts.include_images,
+            include_videos=opts.include_videos,
+            include_archives=opts.include_archives,
+            custom_extensions=opts.custom_extensions,
+        )
         if media_filter:
             args.extend(["--filter", media_filter])
 
         args.append(task.url)
         return args
 
-    def _build_media_filter(self, media_scope: MediaScope) -> str:
-        if media_scope is MediaScope.IMAGES:
-            quoted = ", ".join(f"'{item}'" for item in IMAGE_EXTENSIONS)
-            return f"extension and extension.lower() in ({quoted})"
-        if media_scope is MediaScope.VIDEOS:
-            quoted = ", ".join(f"'{item}'" for item in VIDEO_EXTENSIONS)
+    def _should_use_exact_directory(self, opts) -> bool:
+        return (
+            not opts.organize_by_site
+            and not opts.base_directory.strip()
+            and not opts.directory_template.strip()
+            and not opts.path_restrict.strip()
+            and not opts.path_replace
+            and not opts.path_remove
+            and not opts.path_strip
+            and opts.path_compatibility_mode.strip().lower() == "auto"
+        )
+
+    def _build_media_filter(
+        self,
+        *,
+        include_images: bool,
+        include_videos: bool,
+        include_archives: bool,
+        custom_extensions: str,
+    ) -> str:
+        extensions: list[str] = []
+        if include_images:
+            extensions.extend(IMAGE_EXTENSIONS)
+        if include_videos:
+            extensions.extend(VIDEO_EXTENSIONS)
+        if include_archives:
+            extensions.extend(ARCHIVE_EXTENSIONS)
+
+        for item in custom_extensions.replace(";", ",").split(","):
+            cleaned = item.strip().lower().lstrip(".")
+            if cleaned:
+                extensions.append(cleaned)
+
+        unique_extensions = tuple(dict.fromkeys(extensions))
+        if unique_extensions:
+            quoted = ", ".join(f"'{item}'" for item in unique_extensions)
             return f"extension and extension.lower() in ({quoted})"
         return ""
 
