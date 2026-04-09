@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
@@ -9,7 +9,9 @@ from pathlib import Path
 class AppSettings:
     gallery_dl_path: str = "gallery-dl"
     default_download_dir: str = str(Path.home() / "Downloads")
+    recent_destinations: list[str] = field(default_factory=list)
     last_cookies_browser: str = ""
+    save_logs_by_default: bool = False
     include_images: bool = True
     include_videos: bool = True
     include_archives: bool = False
@@ -46,6 +48,15 @@ class SettingsService:
             return AppSettings()
         except Exception:
             return AppSettings()
+        recent_destinations = payload.get("recent_destinations", [])
+        if not isinstance(recent_destinations, list):
+            recent_destinations = []
+        normalized_recent_destinations = [
+            str(path).strip()
+            for path in recent_destinations
+            if isinstance(path, str) and str(path).strip()
+        ][:10]
+        payload["recent_destinations"] = normalized_recent_destinations
         return AppSettings(**{**asdict(AppSettings()), **payload})
 
     def save(self, settings: AppSettings) -> None:

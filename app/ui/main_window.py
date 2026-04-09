@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication
@@ -57,6 +59,131 @@ SUPPORTED_SITES_DOCK_WIDTH = 440
 ARCHIVE_EXTENSIONS_HINT = ".zip, .rar, .7z, .tar, .gz, .bz2, .xz, .tgz, .tbz2, .txz, .cbz, .cbr, .cb7, .cbt, .zst ..."
 
 
+def _deduplicate_urls(urls: list[str]) -> list[str]:
+    unique_urls: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        normalized = url.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_urls.append(normalized)
+    return unique_urls
+
+
+def _looks_like_url(value: str) -> bool:
+    if not value:
+        return False
+    normalized = value.strip()
+    if any(char.isspace() for char in normalized):
+        return False
+    parsed = urlparse(normalized)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _extract_urls_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+
+    candidates: list[str] = []
+    stripped = text.strip()
+    if _looks_like_url(stripped):
+        candidates.append(stripped)
+
+    for line in stripped.splitlines():
+        line = line.strip()
+        if _looks_like_url(line):
+            candidates.append(line)
+
+    for match in re.findall(r"https?://[^\s<>\"]+", stripped, flags=re.IGNORECASE):
+        candidates.append(match.rstrip("),.;]}>"))
+
+    return _deduplicate_urls(candidates)
+
+
+def _extract_urls_from_bytes(data: bytes) -> list[str]:
+    if not data:
+        return []
+
+    decoded_variants: list[str] = []
+    for encoding in ("utf-16-le", "utf-16", "utf-8", "cp1251", "latin-1"):
+        try:
+            decoded = data.decode(encoding).replace("\x00", "").strip()
+        except UnicodeDecodeError:
+            continue
+        if decoded and decoded not in decoded_variants:
+            decoded_variants.append(decoded)
+
+    urls: list[str] = []
+    for decoded in decoded_variants:
+        urls.extend(_extract_urls_from_text(decoded))
+    return _deduplicate_urls(urls)
+
+
+def _extract_urls_from_html(html: str) -> list[str]:
+    if not html:
+        return []
+    matches = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
+    urls = [match.strip() for match in matches if _looks_like_url(match)]
+    if urls:
+        return _deduplicate_urls(urls)
+    return _extract_urls_from_text(html)
+
+
+def _extract_urls_from_mime_data(mime_data) -> list[str]:
+    urls: list[str] = []
+
+    if mime_data is None:
+        return []
+
+    if mime_data.hasUrls():
+        for url in mime_data.urls():
+            text = url.toString().strip()
+            if _looks_like_url(text):
+                urls.append(text)
+
+    browser_formats = (
+        "text/uri-list",
+        "text/x-moz-url",
+        'application/x-qt-windows-mime;value="UniformResourceLocatorW"',
+        'application/x-qt-windows-mime;value="UniformResourceLocator"',
+    )
+    for mime_type in browser_formats:
+        if mime_data.hasFormat(mime_type):
+            urls.extend(_extract_urls_from_bytes(bytes(mime_data.data(mime_type))))
+
+    if mime_data.hasHtml():
+        urls.extend(_extract_urls_from_html(mime_data.html()))
+
+    if mime_data.hasText():
+        urls.extend(_extract_urls_from_text(mime_data.text()))
+
+    return _deduplicate_urls(urls)
+
+
+def _extract_clipboard_urls_text() -> str:
+    clipboard = QGuiApplication.clipboard()
+    mime_data = clipboard.mimeData()
+    urls = _extract_urls_from_mime_data(mime_data)
+    if urls:
+        return "\n".join(urls)
+    return clipboard.text().strip()
+
+
+class UrlInputTextEdit(QTextEdit):
+    def insertFromMimeData(self, source) -> None:  # noqa: N802
+        urls = _extract_urls_from_mime_data(source)
+        if urls:
+            cursor = self.textCursor()
+            text = "\n".join(urls)
+            if not cursor.atBlockStart() and self.toPlainText():
+                cursor.insertText("\n")
+            cursor.insertText(text)
+            self.setTextCursor(cursor)
+            return
+        super().insertFromMimeData(source)
+
+
 class MainWindow(QMainWindow):
     supported_sites_loaded = Signal(object, bool)
     supported_sites_failed = Signal(str, bool)
@@ -71,9 +198,17 @@ class MainWindow(QMainWindow):
         self.task_rows: dict[str, int] = {}
         self.tasks: dict[str, DownloadTask] = {}
         self.history_rows: dict[str, int] = {}
+        self._initialized_log_files: set[str] = set()
+        self._finalized_log_files: set[str] = set()
+        self._failed_log_files: set[str] = set()
+        self._current_task_id: str | None = None
+        self._current_part_status: str = ""
         self.supported_sites_payload: SupportedSitesPayload | None = None
         self._supported_sites_refresh_active = False
         self._supported_sites_thread: threading.Thread | None = None
+        self._download_poll_timer = QTimer(self)
+        self._download_poll_timer.setInterval(1500)
+        self._download_poll_timer.timeout.connect(self._poll_active_download_progress)
 
         self.setWindowTitle("gallery-dl GUI")
         self.resize(1360, 860)
@@ -120,17 +255,34 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
         top_layout.addWidget(title)
 
-        self.urls_edit = QTextEdit()
+        urls_layout = QHBoxLayout()
+        self.urls_edit = UrlInputTextEdit()
         self.urls_edit.setPlaceholderText(
             "\u0412\u0441\u0442\u0430\u0432\u044c \u043e\u0434\u043d\u0443 \u0438\u043b\u0438 \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e "
             "\u0441\u0441\u044b\u043b\u043e\u043a. \u041a\u0430\u0436\u0434\u0430\u044f \u0441\u0441\u044b\u043b\u043a\u0430 \u0441 \u043d\u043e\u0432\u043e\u0439 "
             "\u0441\u0442\u0440\u043e\u043a\u0438."
         )
         self.urls_edit.setMinimumHeight(120)
-        top_layout.addWidget(self.urls_edit)
+        urls_layout.addWidget(self.urls_edit, 1)
+
+        url_buttons_layout = QVBoxLayout()
+        url_buttons_layout.setSpacing(8)
+        self.paste_button = QPushButton("\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044c")
+        self.clear_button = QPushButton("\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c")
+        for button in (self.paste_button, self.clear_button):
+            button.setMinimumHeight(36)
+            button.setMinimumWidth(120)
+            url_buttons_layout.addWidget(button)
+        url_buttons_layout.addStretch(1)
+        urls_layout.addLayout(url_buttons_layout)
+        top_layout.addLayout(urls_layout)
 
         path_layout = QHBoxLayout()
-        self.destination_edit = QLineEdit(self.app_settings.default_download_dir)
+        self.destination_edit = QComboBox()
+        self.destination_edit.setEditable(True)
+        self.destination_edit.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.destination_edit.setMinimumContentsLength(40)
+        self._load_recent_destinations()
         self.destination_button = QPushButton("\u041e\u0431\u0437\u043e\u0440")
         path_layout.addWidget(QLabel("\u041f\u0430\u043f\u043a\u0430:"))
         path_layout.addWidget(self.destination_edit, 1)
@@ -142,6 +294,11 @@ class MainWindow(QMainWindow):
         self.only_new_check.setChecked(True)
         self.organize_by_site_check = QCheckBox("\u0421\u043e\u0437\u0434\u0430\u0432\u0430\u0442\u044c \u043f\u0430\u043f\u043a\u0438 \u043f\u043e \u0441\u0430\u0439\u0442\u0443")
         self.organize_by_site_check.setChecked(True)
+        self.save_log_check = QCheckBox("\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0442\u044c \u043b\u043e\u0433 \u0432 \u0444\u0430\u0439\u043b")
+        self.save_log_check.setChecked(self.app_settings.save_logs_by_default)
+        self.save_log_check.setToolTip(
+            "\u0414\u043b\u044f \u044d\u0442\u043e\u0439 \u0437\u0430\u0434\u0430\u0447\u0438 \u0431\u0443\u0434\u0435\u0442 \u0441\u043e\u0437\u0434\u0430\u043d \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0439 log-\u0444\u0430\u0439\u043b \u0432 \u043f\u0430\u043f\u043a\u0435 gallery-dl-logs."
+        )
         self.include_images_check = QCheckBox("\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f")
         self.include_images_check.setChecked(self.app_settings.include_images)
         self.include_videos_check = QCheckBox("\u0412\u0438\u0434\u0435\u043e")
@@ -175,6 +332,7 @@ class MainWindow(QMainWindow):
 
         quick_layout.addWidget(self.only_new_check, 0, 0)
         quick_layout.addWidget(self.organize_by_site_check, 0, 1)
+        quick_layout.addWidget(self.save_log_check, 0, 2, 1, 2)
         quick_layout.addWidget(QLabel("\u0422\u0438\u043f\u044b \u0444\u0430\u0439\u043b\u043e\u0432:"), 1, 0)
         quick_layout.addWidget(file_types_widget, 1, 1, 1, 3)
         quick_layout.addWidget(QLabel("\u041a\u0430\u043a\u0438\u0435 \u044d\u043b\u0435\u043c\u0435\u043d\u0442\u044b \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u0442\u044c:"), 2, 0)
@@ -235,33 +393,49 @@ class MainWindow(QMainWindow):
         naming_layout.addWidget(self.naming_preview_label, 4, 1, 1, 4)
         top_layout.addWidget(naming_group)
 
-        actions_layout = QHBoxLayout()
-        self.paste_button = QPushButton("\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044c")
+        primary_actions_layout = QHBoxLayout()
         self.check_button = QPushButton("\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c")
         self.download_button = QPushButton("\u0421\u043a\u0430\u0447\u0430\u0442\u044c")
-        self.clear_button = QPushButton("\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c")
+        self.cancel_button = QPushButton("\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c")
+        self.cancel_button.setEnabled(False)
         self.supported_sites_button = QPushButton("\u041f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0435 \u0441\u0430\u0439\u0442\u044b")
         self.advanced_button = QPushButton("\u0415\u0449\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
-        actions_layout.addWidget(self.paste_button)
-        actions_layout.addWidget(self.check_button)
-        actions_layout.addWidget(self.download_button)
-        actions_layout.addWidget(self.clear_button)
-        actions_layout.addStretch(1)
-        actions_layout.addWidget(self.supported_sites_button)
-        actions_layout.addWidget(self.advanced_button)
+
+        self.check_button.setMinimumHeight(44)
+        self.download_button.setMinimumHeight(44)
+        self.cancel_button.setMinimumHeight(44)
+        self.check_button.setMinimumWidth(150)
+        self.download_button.setMinimumWidth(180)
+        self.cancel_button.setMinimumWidth(150)
+        self.check_button.setStyleSheet("font-weight: 600;")
+        self.download_button.setStyleSheet("font-size: 15px; font-weight: 700;")
+        self.cancel_button.setStyleSheet("font-weight: 600;")
+
+        primary_actions_layout.addWidget(self.check_button)
+        primary_actions_layout.addWidget(self.download_button)
+        primary_actions_layout.addWidget(self.cancel_button)
+        primary_actions_layout.addStretch(1)
+
+        secondary_actions_layout = QHBoxLayout()
+        secondary_actions_layout.setSpacing(8)
+        secondary_actions_layout.addWidget(self.supported_sites_button)
+        secondary_actions_layout.addWidget(self.advanced_button)
+
+        actions_layout = QVBoxLayout()
+        actions_layout.setSpacing(8)
+        actions_layout.addLayout(primary_actions_layout)
+        actions_layout.addLayout(secondary_actions_layout)
         top_layout.addLayout(actions_layout)
 
         self.current_task_label = QLabel("\u041d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 \u0437\u0430\u0434\u0430\u0447\u0438")
+        self.current_task_label.setWordWrap(True)
         self.current_task_progress = QProgressBar()
         self.current_task_progress.setRange(0, 1)
         self.current_task_progress.setValue(0)
-        self.stop_button = QPushButton("\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u0442\u0435\u043a\u0443\u0449\u0443\u044e")
-        self.stop_button.setEnabled(False)
 
         status_layout = QHBoxLayout()
         status_layout.addWidget(self.current_task_label, 1)
         status_layout.addWidget(self.current_task_progress, 2)
-        status_layout.addWidget(self.stop_button)
         top_layout.addLayout(status_layout)
         root.addWidget(top_card)
 
@@ -552,6 +726,161 @@ class MainWindow(QMainWindow):
                 combo.setCurrentIndex(index)
                 return
 
+    def _load_recent_destinations(self) -> None:
+        combo = self.destination_edit
+        combo.blockSignals(True)
+        combo.clear()
+        for path in self.app_settings.recent_destinations[:10]:
+            combo.addItem(path)
+        combo.blockSignals(False)
+        current_text = (
+            self.app_settings.recent_destinations[0]
+            if self.app_settings.recent_destinations
+            else self.app_settings.default_download_dir
+        )
+        combo.setCurrentText(current_text)
+
+    def _destination_text(self) -> str:
+        return self.destination_edit.currentText().strip()
+
+    def _set_destination_text(self, value: str) -> None:
+        self.destination_edit.setCurrentText(value)
+
+    def _register_recent_destination(self, value: str) -> None:
+        normalized = value.strip()
+        if not normalized:
+            return
+        recent = [path for path in self.app_settings.recent_destinations if path.strip() and path.strip() != normalized]
+        recent.insert(0, normalized)
+        self.app_settings.recent_destinations = recent[:10]
+        self._load_recent_destinations()
+
+    def _write_task_log_line(self, task: DownloadTask, line: str) -> None:
+        if not task.options.save_log or not task.log_file_path:
+            return
+        if task.id in self._failed_log_files:
+            return
+
+        log_path = Path(task.log_file_path)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            if task.id not in self._initialized_log_files:
+                header = [
+                    f"Время запуска: {task.created_at.strftime('%d.%m.%Y %H:%M:%S')}",
+                    f"Режим: {task.mode.label}",
+                    f"Сайт: {task.site}",
+                    f"URL: {task.url}",
+                    f"Папка: {task.target_folder}",
+                    "",
+                ]
+                log_path.write_text("\n".join(header), encoding="utf-8")
+                self._initialized_log_files.add(task.id)
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{timestamp}] {line}\n")
+        except Exception as exc:
+            self._failed_log_files.add(task.id)
+            self.log_output.appendPlainText(f"[Система] Не удалось записать лог задачи: {exc}")
+
+    def _finalize_task_log(self, task: DownloadTask) -> None:
+        if (
+            not task.options.save_log
+            or not task.log_file_path
+            or task.id in self._finalized_log_files
+            or task.id in self._failed_log_files
+        ):
+            return
+        summary = f"Итог: {task.status.label}"
+        if task.last_message:
+            summary += f". {task.last_message}"
+        self._write_task_log_line(task, summary)
+        self._finalized_log_files.add(task.id)
+
+    def _format_size(self, value: int) -> str:
+        size = float(value)
+        units = ("Б", "КБ", "МБ", "ГБ")
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                if unit == "Б":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{int(value)} Б"
+
+    def _find_recent_partial_file(self, task: DownloadTask) -> Path | None:
+        root = Path(task.target_folder)
+        if not root.exists():
+            return None
+
+        created_ts = task.created_at.timestamp() - 5
+        newest_path: Path | None = None
+        newest_mtime = 0.0
+        try:
+            candidates = root.rglob("*.part")
+        except Exception:
+            return None
+
+        for path in candidates:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if stat.st_mtime < created_ts:
+                continue
+            if stat.st_mtime >= newest_mtime:
+                newest_mtime = stat.st_mtime
+                newest_path = path
+        return newest_path
+
+    def _render_current_task_banner(self, task: DownloadTask | None) -> None:
+        if task is None:
+            self.current_task_label.setText("\u041d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 \u0437\u0430\u0434\u0430\u0447\u0438")
+            self.current_task_progress.setRange(0, 1)
+            self.current_task_progress.setValue(0)
+            return
+
+        details = self._current_part_status or task.last_message or task.progress_text
+        self.current_task_label.setText(f"{task.mode.label}: {task.title}\n{details}")
+        self.current_task_progress.setRange(0, 0)
+
+    def _poll_active_download_progress(self) -> None:
+        if self._current_task_id is None:
+            return
+        task = self.tasks.get(self._current_task_id)
+        if task is None or task.status is not TaskStatus.RUNNING or task.mode is not TaskMode.DOWNLOAD:
+            self._download_poll_timer.stop()
+            self._current_part_status = ""
+            return
+
+        part_path = self._find_recent_partial_file(task)
+        if part_path is None:
+            return
+
+        try:
+            stat = part_path.stat()
+        except OSError:
+            return
+
+        relative_path = part_path.name
+        try:
+            relative_path = str(part_path.relative_to(Path(task.target_folder)))
+        except ValueError:
+            relative_path = part_path.name
+
+        message = f"\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442\u0441\u044f: {relative_path} ({self._format_size(stat.st_size)})"
+        if message == self._current_part_status:
+            return
+
+        self._current_part_status = message
+        row = self.task_rows.get(task.id)
+        if row is not None:
+            item = self.queue_table.item(row, 5)
+            if item is None:
+                item = QTableWidgetItem()
+                self.queue_table.setItem(row, 5, item)
+            item.setText(message)
+        self._render_current_task_banner(task)
+
     def _selected_naming_compatibility(self) -> str:
         return str(self.path_compatibility_combo.currentData() or "auto")
 
@@ -561,9 +890,9 @@ class MainWindow(QMainWindow):
         self.destination_button.clicked.connect(self._choose_destination)
         self.check_button.clicked.connect(lambda: self._queue_tasks(TaskMode.CHECK))
         self.download_button.clicked.connect(lambda: self._queue_tasks(TaskMode.DOWNLOAD))
+        self.cancel_button.clicked.connect(self.runner.stop_current)
         self.supported_sites_button.clicked.connect(self._toggle_supported_sites)
         self.advanced_button.clicked.connect(self._toggle_advanced)
-        self.stop_button.clicked.connect(self.runner.stop_current)
         self.log_toggle_button.clicked.connect(self._toggle_log_panel)
 
         self.gallery_dl_path_button.clicked.connect(self._choose_gallery_dl_path)
@@ -580,7 +909,7 @@ class MainWindow(QMainWindow):
 
         preview_signals = (
             self.urls_edit.textChanged,
-            self.destination_edit.textChanged,
+            self.destination_edit.editTextChanged,
             self.naming_directory_edit.textChanged,
             self.naming_filename_quick_edit.textChanged,
             self.use_original_filenames_check.toggled,
@@ -723,7 +1052,7 @@ class MainWindow(QMainWindow):
                 break
 
         preview, error = build_path_preview(
-            destination=self.destination_edit.text().strip() or self.app_settings.default_download_dir,
+            destination=self._destination_text() or self.app_settings.default_download_dir,
             url=url,
             directory_template=self.naming_directory_edit.text().strip(),
             filename_template=self.naming_filename_quick_edit.text().strip(),
@@ -932,7 +1261,7 @@ class MainWindow(QMainWindow):
         return parsed.strftime("%d.%m.%Y %H:%M")
 
     def _paste_urls(self) -> None:
-        text = QGuiApplication.clipboard().text().strip()
+        text = _extract_clipboard_urls_text()
         if not text:
             return
         current = self.urls_edit.toPlainText().strip()
@@ -942,10 +1271,11 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(
             self,
             "\u0412\u044b\u0431\u0435\u0440\u0438 \u043f\u0430\u043f\u043a\u0443 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438",
-            self.destination_edit.text() or self.default_folder_edit.text(),
+            self._destination_text() or self.default_folder_edit.text(),
         )
         if folder:
-            self.destination_edit.setText(folder)
+            self._register_recent_destination(folder)
+            self.settings_service.save(self.app_settings)
 
     def _choose_default_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -980,7 +1310,9 @@ class MainWindow(QMainWindow):
         self.app_settings = AppSettings(
             gallery_dl_path=self.gallery_dl_path_edit.text().strip() or "gallery-dl",
             default_download_dir=self.default_folder_edit.text().strip() or str(Path.home() / "Downloads"),
+            recent_destinations=list(self.app_settings.recent_destinations),
             last_cookies_browser=self.browser_cookies_edit.text().strip(),
+            save_logs_by_default=self.save_log_check.isChecked(),
             include_images=self.include_images_check.isChecked(),
             include_videos=self.include_videos_check.isChecked(),
             include_archives=self.include_archives_check.isChecked(),
@@ -997,8 +1329,8 @@ class MainWindow(QMainWindow):
         )
         self.settings_service.save(self.app_settings)
         self.runner.set_gallery_dl_path(self.app_settings.gallery_dl_path)
-        if not self.destination_edit.text().strip():
-            self.destination_edit.setText(self.app_settings.default_download_dir)
+        if not self._destination_text():
+            self._set_destination_text(self.app_settings.default_download_dir)
         self.status_message.setText("\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u044b")
 
     def _queue_tasks(self, mode: TaskMode) -> None:
@@ -1011,7 +1343,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        destination = self.destination_edit.text().strip() or self.app_settings.default_download_dir
+        destination = self._destination_text() or self.app_settings.default_download_dir
         if not destination:
             QMessageBox.warning(
                 self,
@@ -1028,9 +1360,11 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._register_recent_destination(destination)
         options = self._collect_task_options(destination)
         tasks = [DownloadTask(url=url, mode=mode, options=options) for url in urls]
         self.runner.enqueue(tasks)
+        self.settings_service.save(self.app_settings)
         self.status_message.setText(f"\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u0437\u0430\u0434\u0430\u0447: {len(tasks)}")
 
     def _collect_task_options(self, destination: str) -> TaskOptions:
@@ -1040,6 +1374,7 @@ class MainWindow(QMainWindow):
             destination=destination,
             organize_by_site=self.organize_by_site_check.isChecked(),
             only_new=self.only_new_check.isChecked(),
+            save_log=self.save_log_check.isChecked(),
             include_images=self.include_images_check.isChecked(),
             include_videos=self.include_videos_check.isChecked(),
             include_archives=self.include_archives_check.isChecked(),
@@ -1101,6 +1436,11 @@ class MainWindow(QMainWindow):
                 self.queue_table.setItem(row, column, item)
             item.setText(value)
 
+        if task.id == self._current_task_id:
+            if task.status is not TaskStatus.RUNNING or task.mode is not TaskMode.DOWNLOAD:
+                self._current_part_status = ""
+            self._render_current_task_banner(task)
+
         if task.status in {TaskStatus.SUCCESS, TaskStatus.ERROR, TaskStatus.CANCELLED}:
             self._upsert_history(task)
 
@@ -1123,6 +1463,7 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem()
                 self.history_table.setItem(row, column, item)
             item.setText(value)
+        self._finalize_task_log(task)
 
     def _append_log(self, task_id: str, message: str, stream: str) -> None:
         task = self.tasks.get(task_id)
@@ -1133,17 +1474,24 @@ class MainWindow(QMainWindow):
             prefix += "ERR "
         elif stream == "meta":
             prefix += "CMD "
-        self.log_output.appendPlainText(prefix + message)
+        line = prefix + message
+        self.log_output.appendPlainText(line)
+        if task is not None:
+            self._write_task_log_line(task, line)
 
     def _update_queue_state(self, busy: bool) -> None:
-        self.stop_button.setEnabled(busy)
+        self.cancel_button.setEnabled(busy)
 
     def _update_current_task_banner(self, task: DownloadTask | None) -> None:
+        self._current_task_id = task.id if task is not None else None
+        self._current_part_status = ""
         if task is None:
-            self.current_task_label.setText("\u041d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 \u0437\u0430\u0434\u0430\u0447\u0438")
-            self.current_task_progress.setRange(0, 1)
-            self.current_task_progress.setValue(0)
+            self._download_poll_timer.stop()
+            self._render_current_task_banner(None)
             return
 
-        self.current_task_label.setText(f"{task.mode.label}: {task.title}")
-        self.current_task_progress.setRange(0, 0)
+        if task.mode is TaskMode.DOWNLOAD and task.status is TaskStatus.RUNNING:
+            self._download_poll_timer.start()
+        else:
+            self._download_poll_timer.stop()
+        self._render_current_task_banner(task)

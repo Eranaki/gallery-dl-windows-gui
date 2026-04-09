@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+import re
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -41,6 +42,7 @@ class TaskOptions:
     destination: str
     organize_by_site: bool = True
     only_new: bool = True
+    save_log: bool = False
     include_images: bool = True
     include_videos: bool = True
     include_archives: bool = False
@@ -82,10 +84,13 @@ class DownloadTask:
     progress_text: str = "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435"
     last_message: str = ""
     exit_code: int | None = None
+    log_file_path: str = ""
 
     def __post_init__(self) -> None:
         if not self.site:
             self.site = self.detect_site()
+        if self.options.save_log and not self.log_file_path:
+            self.log_file_path = self._build_log_file_path()
 
     @property
     def target_folder(self) -> str:
@@ -105,3 +110,11 @@ class DownloadTask:
         if host.startswith("www."):
             host = host[4:]
         return host or "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e"
+
+    def _build_log_file_path(self) -> str:
+        base_dir = Path(self.options.destination) / "gallery-dl-logs"
+        timestamp = self.created_at.strftime("%Y%m%d-%H%M%S")
+        safe_site = re.sub(r"[^A-Za-z0-9._-]+", "_", self.site or "unknown").strip("._-") or "unknown"
+        safe_mode = self.mode.value
+        filename = f"{timestamp}_{safe_mode}_{safe_site}_{self.id[:8]}.log.txt"
+        return str(base_dir / filename)

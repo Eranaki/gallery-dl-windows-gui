@@ -43,7 +43,9 @@ class GalleryDlRunner(QObject):
         self._gallery_dl_path = gallery_dl_path
         self._queue: deque[DownloadTask] = deque()
         self._current_task: DownloadTask | None = None
+        self._stop_requested = False
         self._process = QProcess(self)
+        self._process.started.connect(self._handle_started)
         self._process.readyReadStandardOutput.connect(self._handle_stdout)
         self._process.readyReadStandardError.connect(self._handle_stderr)
         self._process.finished.connect(self._handle_finished)
@@ -90,6 +92,7 @@ class GalleryDlRunner(QObject):
     def stop_current(self) -> None:
         if self._current_task is None:
             return
+        self._stop_requested = True
         self._current_task.status = TaskStatus.CANCELLED
         self._current_task.progress_text = "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e"
         self._current_task.last_message = "\u0417\u0430\u0434\u0430\u0447\u0430 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0430 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u043c."
@@ -127,6 +130,7 @@ class GalleryDlRunner(QObject):
             f"> {command.display} {' '.join(shlex.quote(arg) for arg in task_args)}",
             "meta",
         )
+        self._stop_requested = False
         self._process.setProgram(command.program)
         self._process.setArguments(arguments)
         self._process.start()
@@ -329,6 +333,17 @@ class GalleryDlRunner(QObject):
             return f"extension and extension.lower() in ({quoted})"
         return ""
 
+    def _handle_started(self) -> None:
+        if self._current_task is None:
+            return
+        if self._current_task.mode is TaskMode.DOWNLOAD:
+            self._current_task.progress_text = "\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435"
+            self._current_task.last_message = "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u0430. \u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435 \u043e\u0442\u0432\u0435\u0442\u0430 \u043e\u0442 gallery-dl..."
+        else:
+            self._current_task.progress_text = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430"
+            self._current_task.last_message = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u0430."
+        self.task_changed.emit(self._current_task)
+
     def _handle_stdout(self) -> None:
         if self._current_task is None:
             return
@@ -358,6 +373,8 @@ class GalleryDlRunner(QObject):
     def _handle_process_error(self, error: QProcess.ProcessError) -> None:
         if self._current_task is None:
             return
+        if self._current_task.status is TaskStatus.CANCELLED and self._stop_requested:
+            return
         self._current_task.status = TaskStatus.ERROR
         self._current_task.progress_text = "\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430"
         self._current_task.last_message = f"QProcess error: {error}"
@@ -371,7 +388,9 @@ class GalleryDlRunner(QObject):
         task.exit_code = exit_code
 
         if task.status is TaskStatus.CANCELLED:
-            task.last_message = "\u0417\u0430\u0434\u0430\u0447\u0430 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0430."
+            task.progress_text = "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e"
+            if not task.last_message:
+                task.last_message = "\u0417\u0430\u0434\u0430\u0447\u0430 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0430."
         elif exit_code == 0:
             task.status = TaskStatus.SUCCESS
             task.progress_text = "\u0413\u043e\u0442\u043e\u0432\u043e"
@@ -388,6 +407,7 @@ class GalleryDlRunner(QObject):
 
     def _finish_task(self) -> None:
         self._current_task = None
+        self._stop_requested = False
         self.current_task_changed.emit(None)
         self.queue_state_changed.emit(bool(self._queue))
         self._start_next_if_needed()
