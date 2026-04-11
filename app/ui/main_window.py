@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -46,10 +47,13 @@ from app.models.supported_sites import SupportedSiteEntry, SupportedSitesPayload
 from app.models.task import DownloadTask, TaskMode, TaskOptions, TaskStatus
 from app.services.gallery_dl_runner import GalleryDlRunner
 from app.services.naming_service import (
+    NamingKeywordEntry,
     NAMING_PRESETS,
-    build_common_keywords_text,
+    GROUP_ORDER,
+    build_common_keyword_entries,
     build_path_preview,
     get_preset_by_id,
+    parse_gallery_dl_keywords,
 )
 from app.services.settings_service import AppSettings, SettingsService
 from app.services.supported_sites_service import DEFAULT_SECTION, SupportedSitesService
@@ -203,6 +207,9 @@ class MainWindow(QMainWindow):
         self._failed_log_files: set[str] = set()
         self._current_task_id: str | None = None
         self._current_part_status: str = ""
+        self._current_part_path: str = ""
+        self._current_part_size: int = 0
+        self._current_part_timestamp: float = 0.0
         self.supported_sites_payload: SupportedSitesPayload | None = None
         self._supported_sites_refresh_active = False
         self._supported_sites_thread: threading.Thread | None = None
@@ -299,6 +306,8 @@ class MainWindow(QMainWindow):
         self.save_log_check.setToolTip(
             "\u0414\u043b\u044f \u044d\u0442\u043e\u0439 \u0437\u0430\u0434\u0430\u0447\u0438 \u0431\u0443\u0434\u0435\u0442 \u0441\u043e\u0437\u0434\u0430\u043d \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0439 log-\u0444\u0430\u0439\u043b \u0432 \u043f\u0430\u043f\u043a\u0435 gallery-dl-logs."
         )
+        self.include_all_files_check = QCheckBox("\u0412\u0441\u0451")
+        self.include_all_files_check.setChecked(self.app_settings.include_all_files)
         self.include_images_check = QCheckBox("\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f")
         self.include_images_check.setChecked(self.app_settings.include_images)
         self.include_videos_check = QCheckBox("\u0412\u0438\u0434\u0435\u043e")
@@ -324,6 +333,7 @@ class MainWindow(QMainWindow):
         file_types_widget = QWidget()
         file_types_layout = QHBoxLayout(file_types_widget)
         file_types_layout.setContentsMargins(0, 0, 0, 0)
+        file_types_layout.addWidget(self.include_all_files_check)
         file_types_layout.addWidget(self.include_images_check)
         file_types_layout.addWidget(self.include_videos_check)
         file_types_layout.addWidget(self.include_archives_check)
@@ -343,15 +353,12 @@ class MainWindow(QMainWindow):
         naming_layout = QGridLayout(naming_group)
         self.naming_preset_combo = QComboBox()
         self.naming_preset_combo.addItem(
-            "\u041f\u0440\u0435\u0441\u0435\u0442 \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d",
+            "\u0428\u0430\u0431\u043b\u043e\u043d \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d",
             "",
         )
         for preset in NAMING_PRESETS:
             self.naming_preset_combo.addItem(preset.label, preset.id)
-        self.naming_apply_preset_button = QPushButton("\u041f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c")
         self.naming_fields_button = QPushButton("\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f")
-        self.naming_advanced_button = QPushButton("\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u044b\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430")
-
         self.naming_directory_edit = QLineEdit(self.app_settings.naming_directory_template)
         self.naming_directory_edit.setPlaceholderText(
             "\u041f\u0443\u0441\u0442\u043e = \u043a\u0430\u043a \u0443 gallery-dl, \u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: {category}/{user[id]}"
@@ -377,20 +384,18 @@ class MainWindow(QMainWindow):
         self.naming_preview_label.setWordWrap(True)
         self.naming_preview_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        naming_layout.addWidget(QLabel("\u041f\u0440\u0435\u0441\u0435\u0442:"), 0, 0)
+        naming_layout.addWidget(QLabel("\u0428\u0430\u0431\u043b\u043e\u043d:"), 0, 0)
         naming_layout.addWidget(self.naming_preset_combo, 0, 1)
-        naming_layout.addWidget(self.naming_apply_preset_button, 0, 2)
-        naming_layout.addWidget(self.naming_fields_button, 0, 3)
-        naming_layout.addWidget(self.naming_advanced_button, 0, 4)
+        naming_layout.addWidget(self.naming_fields_button, 0, 2)
         naming_layout.addWidget(QLabel("\u0421\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u0430 \u043f\u0430\u043f\u043e\u043a:"), 1, 0)
-        naming_layout.addWidget(self.naming_directory_edit, 1, 1, 1, 4)
+        naming_layout.addWidget(self.naming_directory_edit, 1, 1, 1, 3)
         naming_layout.addWidget(QLabel("\u0418\u043c\u044f \u0444\u0430\u0439\u043b\u0430:"), 2, 0)
-        naming_layout.addWidget(self.naming_filename_quick_edit, 2, 1, 1, 4)
+        naming_layout.addWidget(self.naming_filename_quick_edit, 2, 1, 1, 3)
         naming_layout.addWidget(self.use_original_filenames_check, 3, 0, 1, 2)
         naming_layout.addWidget(QLabel("\u0421\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c \u0438\u043c\u0435\u043d:"), 3, 2)
-        naming_layout.addWidget(self.path_compatibility_combo, 3, 3, 1, 2)
+        naming_layout.addWidget(self.path_compatibility_combo, 3, 3)
         naming_layout.addWidget(QLabel("\u041f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u043f\u0443\u0442\u0438:"), 4, 0)
-        naming_layout.addWidget(self.naming_preview_label, 4, 1, 1, 4)
+        naming_layout.addWidget(self.naming_preview_label, 4, 1, 1, 3)
         top_layout.addWidget(naming_group)
 
         primary_actions_layout = QHBoxLayout()
@@ -454,12 +459,15 @@ class MainWindow(QMainWindow):
         self.queue_table.verticalHeader().setVisible(False)
         self.queue_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.queue_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.queue_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.queue_table.horizontalHeader().setStretchLastSection(False)
+        for index in range(6):
+            self.queue_table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+        self.queue_table.setColumnWidth(0, 320)
+        self.queue_table.setColumnWidth(1, 140)
+        self.queue_table.setColumnWidth(2, 120)
+        self.queue_table.setColumnWidth(3, 130)
+        self.queue_table.setColumnWidth(4, 260)
+        self.queue_table.setColumnWidth(5, 420)
 
         self.log_panel = QWidget()
         log_layout = QVBoxLayout(self.log_panel)
@@ -500,11 +508,14 @@ class MainWindow(QMainWindow):
         self.history_table.verticalHeader().setVisible(False)
         self.history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.history_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.history_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.history_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.history_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.history_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.history_table.horizontalHeader().setStretchLastSection(False)
+        for index in range(5):
+            self.history_table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+        self.history_table.setColumnWidth(0, 320)
+        self.history_table.setColumnWidth(1, 140)
+        self.history_table.setColumnWidth(2, 120)
+        self.history_table.setColumnWidth(3, 130)
+        self.history_table.setColumnWidth(4, 420)
         layout.addWidget(self.history_table)
 
     def _build_settings_tab(self) -> None:
@@ -712,13 +723,7 @@ class MainWindow(QMainWindow):
         statusbar.addPermanentWidget(self.status_message)
 
     def _build_actions(self) -> None:
-        toggle_supported_sites = QAction("\u041f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0435 \u0441\u0430\u0439\u0442\u044b", self)
-        toggle_supported_sites.triggered.connect(self._toggle_supported_sites)
-        self.menuBar().addAction(toggle_supported_sites)
-
-        toggle_advanced = QAction("\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", self)
-        toggle_advanced.triggered.connect(self._toggle_advanced)
-        self.menuBar().addAction(toggle_advanced)
+        self.menuBar().hide()
 
     def _set_combo_value(self, combo: QComboBox, value: str) -> None:
         for index in range(combo.count()):
@@ -807,6 +812,19 @@ class MainWindow(QMainWindow):
             size /= 1024
         return f"{int(value)} Б"
 
+    def _format_speed(self, value: float) -> str:
+        if value <= 0:
+            return "0 Б/с"
+        size = value
+        units = ("Б/с", "КБ/с", "МБ/с", "ГБ/с")
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                if unit == "Б/с":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{int(value)} Б/с"
+
     def _find_recent_partial_file(self, task: DownloadTask) -> Path | None:
         root = Path(task.target_folder)
         if not root.exists():
@@ -850,6 +868,9 @@ class MainWindow(QMainWindow):
         if task is None or task.status is not TaskStatus.RUNNING or task.mode is not TaskMode.DOWNLOAD:
             self._download_poll_timer.stop()
             self._current_part_status = ""
+            self._current_part_path = ""
+            self._current_part_size = 0
+            self._current_part_timestamp = 0.0
             return
 
         part_path = self._find_recent_partial_file(task)
@@ -861,13 +882,28 @@ class MainWindow(QMainWindow):
         except OSError:
             return
 
+        now = time.monotonic()
         relative_path = part_path.name
         try:
             relative_path = str(part_path.relative_to(Path(task.target_folder)))
         except ValueError:
             relative_path = part_path.name
 
+        speed_text = ""
+        part_path_text = str(part_path)
+        if self._current_part_path == part_path_text and self._current_part_timestamp:
+            delta_size = stat.st_size - self._current_part_size
+            delta_time = now - self._current_part_timestamp
+            if delta_time > 0:
+                speed_text = self._format_speed(max(0, delta_size) / delta_time)
+
+        self._current_part_path = part_path_text
+        self._current_part_size = stat.st_size
+        self._current_part_timestamp = now
+
         message = f"\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442\u0441\u044f: {relative_path} ({self._format_size(stat.st_size)})"
+        if speed_text:
+            message = f"{message} • {speed_text}"
         if message == self._current_part_status:
             return
 
@@ -899,10 +935,10 @@ class MainWindow(QMainWindow):
         self.default_folder_button.clicked.connect(self._choose_default_folder)
         self.save_settings_button.clicked.connect(self._save_settings)
         self.cookies_file_button.clicked.connect(self._choose_cookies_file)
-        self.naming_apply_preset_button.clicked.connect(self._apply_naming_preset)
+        self.naming_preset_combo.currentIndexChanged.connect(self._apply_naming_preset)
         self.naming_fields_button.clicked.connect(self._show_available_fields)
-        self.naming_advanced_button.clicked.connect(self._open_advanced_naming)
         self.use_original_filenames_check.toggled.connect(self._sync_filename_state)
+        self.include_all_files_check.toggled.connect(self._sync_file_type_controls)
         self.include_custom_extensions_check.toggled.connect(self._sync_custom_extensions_state)
         self.naming_filename_quick_edit.textChanged.connect(self._sync_filename_template_from_quick)
         self.filename_template_edit.textChanged.connect(self._sync_filename_template_from_advanced)
@@ -932,7 +968,7 @@ class MainWindow(QMainWindow):
         self.runner.task_output.connect(self._append_log)
         self.runner.queue_state_changed.connect(self._update_queue_state)
         self.runner.current_task_changed.connect(self._update_current_task_banner)
-        self._sync_custom_extensions_state()
+        self._sync_file_type_controls()
         self._sync_filename_state()
         self._update_naming_preview()
 
@@ -968,8 +1004,22 @@ class MainWindow(QMainWindow):
         self._update_naming_preview()
 
     def _sync_custom_extensions_state(self) -> None:
+        if self.include_all_files_check.isChecked():
+            self.custom_extensions_edit.setEnabled(False)
+            return
         enabled = self.include_custom_extensions_check.isChecked()
         self.custom_extensions_edit.setEnabled(enabled)
+
+    def _sync_file_type_controls(self) -> None:
+        include_all = self.include_all_files_check.isChecked()
+        for checkbox in (
+            self.include_images_check,
+            self.include_videos_check,
+            self.include_archives_check,
+            self.include_custom_extensions_check,
+        ):
+            checkbox.setEnabled(not include_all)
+        self._sync_custom_extensions_state()
 
     def _sync_filename_template_from_quick(self, value: str) -> None:
         if self.filename_template_edit.text() != value:
@@ -984,7 +1034,7 @@ class MainWindow(QMainWindow):
             self.naming_filename_quick_edit.blockSignals(False)
         self._update_naming_preview()
 
-    def _apply_naming_preset(self) -> None:
+    def _apply_naming_preset(self, _index: int | None = None) -> None:
         preset_id = str(self.naming_preset_combo.currentData() or "")
         preset = get_preset_by_id(preset_id)
         if preset is None:
@@ -1003,29 +1053,242 @@ class MainWindow(QMainWindow):
     def _show_available_fields(self) -> None:
         urls = [line.strip() for line in self.urls_edit.toPlainText().splitlines() if line.strip()]
         if not urls:
-            self._show_readonly_text_dialog(
-                "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f",
-                build_common_keywords_text(),
+            self._show_keyword_browser_dialog(
+                entries=build_common_keyword_entries(),
+                note=(
+                    "Ссылка еще не указана, поэтому показан общий набор часто используемых полей. "
+                    "Когда ты добавишь URL, здесь появятся точные поля для конкретного сайта."
+                ),
+                raw_output="",
             )
             return
 
         success, output = self.runner.inspect_keywords(urls[0])
         if success:
-            self._show_readonly_text_dialog(
-                "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f",
-                output,
-            )
-            return
+            entries = parse_gallery_dl_keywords(output)
+            if entries:
+                self._show_keyword_browser_dialog(
+                    entries=entries,
+                    note=(
+                        "Показаны поля, которые gallery-dl вернул для первой ссылки из списка. "
+                        "Их можно вставлять в шаблон папки или имени файла."
+                    ),
+                    raw_output=output,
+                )
+                return
 
-        text = (
-            "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0442\u043e\u0447\u043d\u044b\u0435 keywords \u043e\u0442 gallery-dl.\n\n"
-            f"{output}\n\n"
-            f"{build_common_keywords_text(urls[0])}"
+        note = (
+            "Не удалось получить точный список полей от gallery-dl. "
+            "Показан общий набор, который подходит для большинства сайтов."
         )
-        self._show_readonly_text_dialog(
-            "\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u043e\u043b\u044f",
-            text,
+        if output:
+            note += "\n\nТехническое сообщение:\n" + output
+        self._show_keyword_browser_dialog(
+            entries=build_common_keyword_entries(urls[0]),
+            note=note,
+            raw_output=output,
         )
+
+    def _show_keyword_browser_dialog(
+        self,
+        *,
+        entries: list[NamingKeywordEntry],
+        note: str,
+        raw_output: str,
+    ) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Доступные поля")
+        dialog.resize(1080, 680)
+
+        layout = QVBoxLayout(dialog)
+
+        note_label = QLabel(note)
+        note_label.setWordWrap(True)
+        note_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(note_label)
+
+        helper_label = QLabel(
+            "Выбери поле в списке ниже. Вставка идет в текущее место курсора в шаблоне."
+        )
+        helper_label.setStyleSheet("color: #555;")
+        helper_label.setWordWrap(True)
+        layout.addWidget(helper_label)
+
+        search_layout = QHBoxLayout()
+        search_layout.addWidget(QLabel("Поиск:"))
+        search_edit = QLineEdit()
+        search_edit.setPlaceholderText("Например: title, date, filename, user")
+        search_layout.addWidget(search_edit, 1)
+        layout.addLayout(search_layout)
+
+        tree = QTreeWidget()
+        tree.setColumnCount(4)
+        tree.setHeaderLabels(("Поле", "Пример", "Что означает", "Где использовать"))
+        tree.setAlternatingRowColors(True)
+        tree.setRootIsDecorated(True)
+        tree.setUniformRowHeights(False)
+        tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
+        tree.header().setStretchLastSection(False)
+        tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        tree.setColumnWidth(0, 240)
+        tree.setColumnWidth(1, 220)
+        tree.setColumnWidth(3, 150)
+        self._populate_keyword_tree(tree, entries)
+        layout.addWidget(tree, 1)
+
+        selected_group = QGroupBox("Выбранное поле")
+        selected_layout = QGridLayout(selected_group)
+        token_value = QLabel("Выбери поле в списке.")
+        token_value.setWordWrap(True)
+        token_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        description_value = QLabel("-")
+        description_value.setWordWrap(True)
+        description_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        selected_layout.addWidget(QLabel("Шаблон:"), 0, 0)
+        selected_layout.addWidget(token_value, 0, 1)
+        selected_layout.addWidget(QLabel("Пояснение:"), 1, 0)
+        selected_layout.addWidget(description_value, 1, 1)
+        layout.addWidget(selected_group)
+
+        buttons_layout = QHBoxLayout()
+        insert_directory_button = QPushButton("Вставить в папку")
+        insert_filename_button = QPushButton("Вставить в имя файла")
+        raw_button = QPushButton("Показать сырой вывод")
+        close_button = QPushButton("Закрыть")
+        insert_directory_button.setEnabled(False)
+        insert_filename_button.setEnabled(False)
+        raw_button.setEnabled(bool(raw_output.strip()))
+        buttons_layout.addWidget(insert_directory_button)
+        buttons_layout.addWidget(insert_filename_button)
+        buttons_layout.addStretch(1)
+        buttons_layout.addWidget(raw_button)
+        buttons_layout.addWidget(close_button)
+        layout.addLayout(buttons_layout)
+
+        def current_entry() -> NamingKeywordEntry | None:
+            item = tree.currentItem()
+            if item is None:
+                return None
+            entry = item.data(0, Qt.ItemDataRole.UserRole)
+            return entry if isinstance(entry, NamingKeywordEntry) else None
+
+        def sync_selection() -> None:
+            entry = current_entry()
+            has_entry = entry is not None
+            insert_directory_button.setEnabled(has_entry)
+            insert_filename_button.setEnabled(has_entry)
+            if not has_entry:
+                token_value.setText("Выбери поле в списке.")
+                description_value.setText("-")
+                return
+            token_value.setText(entry.template)
+            description_value.setText(
+                f"{entry.description}\n\nПример: {entry.sample}\nГде использовать: {entry.usage}"
+            )
+
+        def insert_into_directory() -> None:
+            entry = current_entry()
+            if entry is None:
+                return
+            self._insert_text_into_line_edit(self.naming_directory_edit, entry.template)
+            self.naming_directory_edit.setFocus()
+            self.status_message.setText(f"В шаблон папок вставлено {entry.template}")
+
+        def insert_into_filename() -> None:
+            entry = current_entry()
+            if entry is None:
+                return
+            if self.use_original_filenames_check.isChecked():
+                self.use_original_filenames_check.setChecked(False)
+            self._insert_text_into_line_edit(self.naming_filename_quick_edit, entry.template)
+            self.naming_filename_quick_edit.setFocus()
+            self.status_message.setText(f"В шаблон имени файла вставлено {entry.template}")
+
+        search_edit.textChanged.connect(lambda text: self._filter_keyword_tree(tree, text))
+        tree.currentItemChanged.connect(lambda _current, _previous: sync_selection())
+        insert_directory_button.clicked.connect(insert_into_directory)
+        insert_filename_button.clicked.connect(insert_into_filename)
+        raw_button.clicked.connect(
+            lambda: self._show_readonly_text_dialog("Сырой вывод gallery-dl", raw_output)
+        )
+        close_button.clicked.connect(dialog.close)
+
+        self._filter_keyword_tree(tree, "")
+        sync_selection()
+        dialog.exec()
+
+    def _populate_keyword_tree(
+        self,
+        tree: QTreeWidget,
+        entries: list[NamingKeywordEntry],
+    ) -> None:
+        tree.clear()
+        grouped: dict[str, list[NamingKeywordEntry]] = {group: [] for group in GROUP_ORDER}
+        for entry in entries:
+            grouped.setdefault(entry.group, []).append(entry)
+
+        for group_name in GROUP_ORDER:
+            group_entries = grouped.get(group_name, [])
+            if not group_entries:
+                continue
+            group_item = QTreeWidgetItem([group_name])
+            group_item.setFlags(group_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            group_item.setFirstColumnSpanned(True)
+            tree.addTopLevelItem(group_item)
+
+            for entry in group_entries:
+                item = QTreeWidgetItem(
+                    [
+                        entry.name,
+                        entry.sample,
+                        entry.description,
+                        entry.usage,
+                    ]
+                )
+                item.setData(0, Qt.ItemDataRole.UserRole, entry)
+                item.setToolTip(0, entry.template)
+                item.setToolTip(1, entry.sample)
+                item.setToolTip(2, entry.description)
+                item.setToolTip(3, entry.usage)
+                group_item.addChild(item)
+
+            group_item.setExpanded(group_name in {"Полезно для папок", "Полезно для файлов"})
+
+    def _filter_keyword_tree(self, tree: QTreeWidget, text: str) -> None:
+        query = text.strip().lower()
+        first_visible_item: QTreeWidgetItem | None = None
+
+        for index in range(tree.topLevelItemCount()):
+            group_item = tree.topLevelItem(index)
+            visible_children = 0
+            for child_index in range(group_item.childCount()):
+                child = group_item.child(child_index)
+                entry = child.data(0, Qt.ItemDataRole.UserRole)
+                visible = True
+                if isinstance(entry, NamingKeywordEntry) and query:
+                    visible = query in entry.search_text
+                child.setHidden(not visible)
+                if visible:
+                    visible_children += 1
+                    if first_visible_item is None:
+                        first_visible_item = child
+
+            group_item.setHidden(visible_children == 0)
+            if query:
+                group_item.setExpanded(visible_children > 0)
+
+        current = tree.currentItem()
+        if current is not None and current.isHidden():
+            tree.setCurrentItem(None)
+
+        if first_visible_item is not None and tree.currentItem() is None:
+            tree.setCurrentItem(first_visible_item)
+
+    def _insert_text_into_line_edit(self, line_edit: QLineEdit, text: str) -> None:
+        line_edit.insert(text)
 
     def _show_readonly_text_dialog(self, title: str, text: str) -> None:
         dialog = QDialog(self)
@@ -1313,6 +1576,7 @@ class MainWindow(QMainWindow):
             recent_destinations=list(self.app_settings.recent_destinations),
             last_cookies_browser=self.browser_cookies_edit.text().strip(),
             save_logs_by_default=self.save_log_check.isChecked(),
+            include_all_files=self.include_all_files_check.isChecked(),
             include_images=self.include_images_check.isChecked(),
             include_videos=self.include_videos_check.isChecked(),
             include_archives=self.include_archives_check.isChecked(),
@@ -1375,6 +1639,7 @@ class MainWindow(QMainWindow):
             organize_by_site=self.organize_by_site_check.isChecked(),
             only_new=self.only_new_check.isChecked(),
             save_log=self.save_log_check.isChecked(),
+            include_all_files=self.include_all_files_check.isChecked(),
             include_images=self.include_images_check.isChecked(),
             include_videos=self.include_videos_check.isChecked(),
             include_archives=self.include_archives_check.isChecked(),
@@ -1405,6 +1670,8 @@ class MainWindow(QMainWindow):
         )
 
     def _has_selected_file_types(self) -> bool:
+        if self.include_all_files_check.isChecked():
+            return True
         return any(
             (
                 self.include_images_check.isChecked(),
@@ -1485,6 +1752,9 @@ class MainWindow(QMainWindow):
     def _update_current_task_banner(self, task: DownloadTask | None) -> None:
         self._current_task_id = task.id if task is not None else None
         self._current_part_status = ""
+        self._current_part_path = ""
+        self._current_part_size = 0
+        self._current_part_timestamp = 0.0
         if task is None:
             self._download_poll_timer.stop()
             self._render_current_task_banner(None)

@@ -43,6 +43,7 @@ class TaskOptions:
     organize_by_site: bool = True
     only_new: bool = True
     save_log: bool = False
+    include_all_files: bool = False
     include_images: bool = True
     include_videos: bool = True
     include_archives: bool = False

@@ -283,6 +283,7 @@ class GalleryDlRunner(QObject):
             args.extend(["--http-timeout", opts.timeout.strip()])
 
         media_filter = self._build_media_filter(
+            include_all_files=opts.include_all_files,
             include_images=opts.include_images,
             include_videos=opts.include_videos,
             include_archives=opts.include_archives,
@@ -309,11 +310,15 @@ class GalleryDlRunner(QObject):
     def _build_media_filter(
         self,
         *,
+        include_all_files: bool,
         include_images: bool,
         include_videos: bool,
         include_archives: bool,
         custom_extensions: str,
     ) -> str:
+        if include_all_files:
+            return ""
+
         extensions: list[str] = []
         if include_images:
             extensions.extend(IMAGE_EXTENSIONS)
