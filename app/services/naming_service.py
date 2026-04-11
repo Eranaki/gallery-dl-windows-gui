@@ -13,6 +13,10 @@ WINDOWS_INVALID_RE = re.compile(r'[<>:"/\\|?*]')
 ASCII_INVALID_RE = re.compile(r"[^0-9A-Za-z._ -]")
 
 
+def _txt(language: str, ru: str, en: str) -> str:
+    return ru if language == "ru" else en
+
+
 @dataclass(frozen=True, slots=True)
 class NamingPreset:
     id: str
@@ -56,58 +60,6 @@ class PreviewKeywordObject(dict):
         return super().__str__()
 
 
-NAMING_PRESETS: tuple[NamingPreset, ...] = (
-    NamingPreset(
-        id="post-title-original",
-        label="\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043f\u043e\u0441\u0442\u0430",
-        description="\u041a\u0430\u0436\u0434\u044b\u0439 \u043f\u043e\u0441\u0442 \u0432 \u0441\u0432\u043e\u0435\u0439 \u043f\u0430\u043f\u043a\u0435 \u0441 \u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u043c\u0438 \u0438\u043c\u0435\u043d\u0430\u043c\u0438 \u0444\u0430\u0439\u043b\u043e\u0432.",
-        directory_template="{title}",
-        filename_template="",
-        use_original_filenames=True,
-    ),
-    NamingPreset(
-        id="date-title-original",
-        label="\u0414\u0430\u0442\u0430 + \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043f\u043e\u0441\u0442\u0430",
-        description="\u0412 \u0438\u043c\u044f \u043f\u0430\u043f\u043a\u0438 \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0435\u0442\u0441\u044f \u0434\u0430\u0442\u0430 \u043f\u0443\u0431\u043b\u0438\u043a\u0430\u0446\u0438\u0438 \u043f\u043e\u0441\u0442\u0430.",
-        directory_template="{date:%Y-%m-%d} {title}",
-        filename_template="",
-        use_original_filenames=True,
-    ),
-    NamingPreset(
-        id="site-service-user-title-original",
-        label="\u0421\u0430\u0439\u0442 / \u0441\u0435\u0440\u0432\u0438\u0441 / \u0430\u0432\u0442\u043e\u0440 / \u043f\u043e\u0441\u0442",
-        description="\u0423\u0434\u043e\u0431\u043d\u0430\u044f \u0438\u0435\u0440\u0430\u0440\u0445\u0438\u044f \u0434\u043b\u044f Kemono, Bunkr \u0438 \u043f\u043e\u0445\u043e\u0436\u0438\u0445 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u043e\u0432.",
-        directory_template="{category}/{service}/{user}/{title}",
-        filename_template="",
-        use_original_filenames=True,
-    ),
-    NamingPreset(
-        id="site-service-user-date-title-original",
-        label="\u0421\u0430\u0439\u0442 / \u0441\u0435\u0440\u0432\u0438\u0441 / \u0430\u0432\u0442\u043e\u0440 / \u0434\u0430\u0442\u0430 + \u043f\u043e\u0441\u0442",
-        description="\u0422\u043e \u0436\u0435, \u043d\u043e \u0441 \u0434\u0430\u0442\u043e\u0439 \u0432 \u0438\u043c\u0435\u043d\u0438 \u043f\u0430\u043f\u043a\u0438 \u043f\u043e\u0441\u0442\u0430.",
-        directory_template="{category}/{service}/{user}/{date:%Y-%m-%d} {title}",
-        filename_template="",
-        use_original_filenames=True,
-    ),
-    NamingPreset(
-        id="site-service-user-date-title-numbered",
-        label="\u0421\u0430\u0439\u0442 / \u0441\u0435\u0440\u0432\u0438\u0441 / \u0430\u0432\u0442\u043e\u0440 / \u0434\u0430\u0442\u0430 + \u043f\u043e\u0441\u0442 / \u043d\u0443\u043c\u0435\u0440\u0430\u0446\u0438\u044f",
-        description="\u0415\u0441\u043b\u0438 \u043e\u0440\u0438\u0433\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0435 \u0438\u043c\u0435\u043d\u0430 \u0444\u0430\u0439\u043b\u043e\u0432 \u043d\u0435\u0443\u0434\u043e\u0431\u043d\u044b, \u0444\u0430\u0439\u043b\u044b \u0431\u0443\u0434\u0443\u0442 \u0438\u0434\u0442\u0438 \u043f\u043e \u043f\u043e\u0440\u044f\u0434\u043a\u0443.",
-        directory_template="{category}/{service}/{user}/{date:%Y-%m-%d} {title}",
-        filename_template="{num:>03}.{extension}",
-        use_original_filenames=False,
-    ),
-    NamingPreset(
-        id="author-date-title-original",
-        label="\u0410\u0432\u0442\u043e\u0440 / \u0434\u0430\u0442\u0430 + \u043f\u043e\u0441\u0442",
-        description="\u041a\u043e\u0440\u043e\u0442\u043a\u0438\u0439 \u0432\u0430\u0440\u0438\u0430\u043d\u0442: \u043f\u0430\u043f\u043a\u0430 \u0430\u0432\u0442\u043e\u0440\u0430, \u0430 \u0432\u043d\u0443\u0442\u0440\u0438 \u043f\u043e\u0441\u0442\u044b \u043f\u043e \u0434\u0430\u0442\u0435 \u0438 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e.",
-        directory_template="{user}/{date:%Y-%m-%d} {title}",
-        filename_template="",
-        use_original_filenames=True,
-    ),
-)
-
-
 COMMON_KEYWORD_REFERENCE = """category
 id
 title
@@ -122,14 +74,99 @@ search_tags
 _now
 """
 
-GROUP_ORDER: tuple[str, ...] = (
-    "Полезно для папок",
-    "Полезно для файлов",
-    "Автор и профиль",
-    "Пост и публикация",
-    "Вложения и файлы",
-    "Служебные",
-)
+
+def get_group_order(language: str = "ru") -> tuple[str, ...]:
+    return (
+        _txt(language, "Полезно для папок", "Useful for folders"),
+        _txt(language, "Полезно для файлов", "Useful for files"),
+        _txt(language, "Автор и профиль", "Author and profile"),
+        _txt(language, "Пост и публикация", "Post and publication"),
+        _txt(language, "Вложения и файлы", "Attachments and files"),
+        _txt(language, "Служебные", "Technical"),
+    )
+
+
+GROUP_ORDER: tuple[str, ...] = get_group_order("ru")
+
+
+def get_naming_presets(language: str = "ru") -> tuple[NamingPreset, ...]:
+    return (
+        NamingPreset(
+            id="post-title-original",
+            label=_txt(language, "Название поста", "Post title"),
+            description=_txt(
+                language,
+                "Каждый пост в своей папке с оригинальными именами файлов.",
+                "Each post gets its own folder and keeps the original file names.",
+            ),
+            directory_template="{title}",
+            filename_template="",
+            use_original_filenames=True,
+        ),
+        NamingPreset(
+            id="date-title-original",
+            label=_txt(language, "Дата + название поста", "Date + post title"),
+            description=_txt(
+                language,
+                "В имя папки добавляется дата публикации поста.",
+                "Adds the post publication date to the folder name.",
+            ),
+            directory_template="{date:%Y-%m-%d} {title}",
+            filename_template="",
+            use_original_filenames=True,
+        ),
+        NamingPreset(
+            id="site-service-user-title-original",
+            label=_txt(language, "Сайт / сервис / автор / пост", "Site / service / author / post"),
+            description=_txt(
+                language,
+                "Удобная иерархия для Kemono, Bunkr и похожих источников.",
+                "A convenient hierarchy for Kemono, Bunkr, and similar sources.",
+            ),
+            directory_template="{category}/{service}/{user}/{title}",
+            filename_template="",
+            use_original_filenames=True,
+        ),
+        NamingPreset(
+            id="site-service-user-date-title-original",
+            label=_txt(language, "Сайт / сервис / автор / дата + пост", "Site / service / author / date + post"),
+            description=_txt(
+                language,
+                "То же, но с датой в имени папки поста.",
+                "Same structure, but with the date in the post folder name.",
+            ),
+            directory_template="{category}/{service}/{user}/{date:%Y-%m-%d} {title}",
+            filename_template="",
+            use_original_filenames=True,
+        ),
+        NamingPreset(
+            id="site-service-user-date-title-numbered",
+            label=_txt(language, "Сайт / сервис / автор / дата + пост / нумерация", "Site / service / author / date + post / numbering"),
+            description=_txt(
+                language,
+                "Если оригинальные имена неудобны, файлы будут идти по порядку.",
+                "If original file names are messy, files will be numbered in order.",
+            ),
+            directory_template="{category}/{service}/{user}/{date:%Y-%m-%d} {title}",
+            filename_template="{num:>03}.{extension}",
+            use_original_filenames=False,
+        ),
+        NamingPreset(
+            id="author-date-title-original",
+            label=_txt(language, "Автор / дата + пост", "Author / date + post"),
+            description=_txt(
+                language,
+                "Короткий вариант: папка автора, а внутри посты по дате и названию.",
+                "A compact layout: author folder with posts grouped by date and title.",
+            ),
+            directory_template="{user}/{date:%Y-%m-%d} {title}",
+            filename_template="",
+            use_original_filenames=True,
+        ),
+    )
+
+
+NAMING_PRESETS: tuple[NamingPreset, ...] = get_naming_presets("ru")
 
 
 def split_directory_template(template: str) -> list[str]:
@@ -148,16 +185,19 @@ def build_sample_keywords(url: str = "") -> dict[str, object]:
     now = datetime.now()
     return {
         "category": category,
+        "service": "service",
         "id": 123456,
         "title": "Sample Title",
         "filename": "original-file",
         "extension": "jpg",
+        "name": "original-file.jpg",
         "num": 1,
         "page": 3,
         "chapter": "12",
         "manga": "Sample Manga",
         "search_tags": "tag1 tag2",
         "user": PreviewKeywordObject(id="artist123", name="Author Name"),
+        "username": "Author Name",
         "date": now,
         "_now": now,
     }
@@ -225,37 +265,48 @@ def build_path_preview(
     return str(final_path), None
 
 
-def get_preset_by_id(preset_id: str) -> NamingPreset | None:
-    for preset in NAMING_PRESETS:
+def get_preset_by_id(preset_id: str, language: str = "ru") -> NamingPreset | None:
+    for preset in get_naming_presets(language):
         if preset.id == preset_id:
             return preset
     return None
 
 
-def build_common_keywords_text(url: str = "") -> str:
+def build_common_keywords_text(url: str = "", language: str = "ru") -> str:
     category = build_sample_keywords(url)["category"]
     lines = [
-        "\u0414\u043b\u044f \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0441\u0441\u044b\u043b\u043a\u0438 \u0442\u043e\u0447\u043d\u044b\u0439 \u043d\u0430\u0431\u043e\u0440 \u043f\u043e\u043b\u0435\u0439 \u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043e\u0442 \u0441\u0430\u0439\u0442\u0430.",
+        _txt(
+            language,
+            "Для текущей ссылки точный набор полей зависит от сайта.",
+            "The exact list of fields depends on the current site.",
+        ),
         "",
-        "\u0411\u044b\u0441\u0442\u0440\u044b\u0439 \u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440:",
+        _txt(language, "Быстрый ориентир:", "Quick reference:"),
         COMMON_KEYWORD_REFERENCE.strip(),
         "",
-        f"\u0414\u043b\u044f preview \u0441\u0435\u0439\u0447\u0430\u0441 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442\u0441\u044f category={category}",
+        _txt(
+            language,
+            f"Для preview сейчас используется category={category}",
+            f"The preview currently uses category={category}",
+        ),
     ]
     return "\n".join(lines)
 
 
-def build_common_keyword_entries(url: str = "") -> list[NamingKeywordEntry]:
+def build_common_keyword_entries(url: str = "", language: str = "ru") -> list[NamingKeywordEntry]:
     keywords = build_sample_keywords(url)
     common_fields = (
         ("category", keywords["category"], ("directory", "file")),
+        ("service", keywords["service"], ("directory", "file")),
         ("id", keywords["id"], ("directory", "file")),
         ("title", keywords["title"], ("directory", "file")),
         ("date", keywords["date"], ("directory", "file")),
         ("filename", keywords["filename"], ("file",)),
         ("extension", keywords["extension"], ("file",)),
+        ("name", keywords["name"], ("file",)),
         ("user[id]", keywords["user"]["id"], ("directory", "file")),
         ("user[name]", keywords["user"]["name"], ("directory", "file")),
+        ("username", keywords["username"], ("directory", "file")),
         ("manga", keywords["manga"], ("directory", "file")),
         ("chapter", keywords["chapter"], ("directory", "file")),
         ("page", keywords["page"], ("file",)),
@@ -269,12 +320,13 @@ def build_common_keyword_entries(url: str = "") -> list[NamingKeywordEntry]:
                 name=name,
                 sample=_stringify_keyword_sample(sample),
                 sections=tuple(sections),
+                language=language,
             )
         )
-    return sorted(entries, key=_keyword_sort_key)
+    return sorted(entries, key=lambda entry: _keyword_sort_key(entry, language))
 
 
-def parse_gallery_dl_keywords(text: str) -> list[NamingKeywordEntry]:
+def parse_gallery_dl_keywords(text: str, language: str = "ru") -> list[NamingKeywordEntry]:
     if not text.strip():
         return []
 
@@ -349,9 +401,10 @@ def parse_gallery_dl_keywords(text: str) -> list[NamingKeywordEntry]:
                 name=name,
                 sample=str(payload["sample"] or "-"),
                 sections=sections,
+                language=language,
             )
         )
-    return sorted(results, key=_keyword_sort_key)
+    return sorted(results, key=lambda entry: _keyword_sort_key(entry, language))
 
 
 def _render_template(template: str, keywords: dict[str, object]) -> str:
@@ -387,11 +440,12 @@ def _sanitize_path_segment(
     return cleaned or "_"
 
 
-def _keyword_sort_key(entry: NamingKeywordEntry) -> tuple[int, str]:
+def _keyword_sort_key(entry: NamingKeywordEntry, language: str) -> tuple[int, str]:
+    group_order = get_group_order(language)
     try:
-        group_index = GROUP_ORDER.index(entry.group)
+        group_index = group_order.index(entry.group)
     except ValueError:
-        group_index = len(GROUP_ORDER)
+        group_index = len(group_order)
     return group_index, entry.name.lower()
 
 
@@ -400,10 +454,11 @@ def _build_keyword_entry(
     name: str,
     sample: str,
     sections: tuple[str, ...],
+    language: str = "ru",
 ) -> NamingKeywordEntry:
     normalized_name = normalize_keyword_name(name)
-    description, group = describe_keyword(normalized_name)
-    usage = determine_keyword_usage(normalized_name, sections)
+    description, group = describe_keyword(normalized_name, language)
+    usage = determine_keyword_usage(normalized_name, sections, language)
     return NamingKeywordEntry(
         name=normalized_name,
         sample=sample,
@@ -423,46 +478,46 @@ def build_keyword_template(name: str) -> str:
     return "{" + normalize_keyword_name(name) + "}"
 
 
-def determine_keyword_usage(name: str, sections: tuple[str, ...]) -> str:
+def determine_keyword_usage(name: str, sections: tuple[str, ...], language: str = "ru") -> str:
     section_set = set(sections)
     if name.startswith(("attachments[", "file[")):
-        return "Файлы"
+        return _txt(language, "Файлы", "Files")
     if "directory" in section_set and "file" in section_set:
-        return "Папки и файлы"
+        return _txt(language, "Папки и файлы", "Folders and files")
     if "directory" in section_set:
-        return "Папки"
+        return _txt(language, "Папки", "Folders")
     if "file" in section_set:
-        return "Файлы и фильтр"
+        return _txt(language, "Файлы и фильтр", "Files and filters")
     if name in {"filename", "extension", "name", "path", "hash", "url", "num"}:
-        return "Файлы"
-    return "Папки и файлы"
+        return _txt(language, "Файлы", "Files")
+    return _txt(language, "Папки и файлы", "Folders and files")
 
 
-def describe_keyword(name: str) -> tuple[str, str]:
+def describe_keyword(name: str, language: str = "ru") -> tuple[str, str]:
     exact: dict[str, tuple[str, str]] = {
-        "category": ("Категория или сайт, через который идет загрузка.", "Полезно для папок"),
-        "service": ("Источник внутри сервиса, например patreon или fanbox.", "Пост и публикация"),
-        "subcategory": ("Подкатегория или подтип источника.", "Служебные"),
-        "title": ("Название поста, галереи или записи.", "Пост и публикация"),
-        "date": ("Дата публикации в формате даты и времени.", "Пост и публикация"),
-        "published": ("Дата публикации как исходная строка сервиса.", "Пост и публикация"),
-        "id": ("Уникальный идентификатор поста или объекта.", "Пост и публикация"),
-        "user": ("Идентификатор автора или профиля.", "Автор и профиль"),
-        "username": ("Имя автора, если сервис его отдает отдельно.", "Автор и профиль"),
-        "count": ("Количество файлов или вложений внутри поста.", "Пост и публикация"),
-        "filename": ("Имя файла без расширения.", "Полезно для файлов"),
-        "extension": ("Расширение файла без точки.", "Полезно для файлов"),
-        "name": ("Полное имя файла, обычно с расширением.", "Полезно для файлов"),
-        "num": ("Порядковый номер файла в посте или галерее.", "Полезно для файлов"),
-        "path": ("Внутренний путь файла на сервере источника.", "Вложения и файлы"),
-        "url": ("Прямая ссылка на файл или вложение.", "Вложения и файлы"),
-        "hash": ("Хэш или служебный идентификатор содержимого.", "Вложения и файлы"),
-        "substring": ("Служебная часть совпадения URL у extractor-а.", "Служебные"),
-        "_now": ("Текущее время на момент запуска задачи.", "Служебные"),
-        "manga": ("Название манги или серии.", "Пост и публикация"),
-        "chapter": ("Номер или название главы.", "Пост и публикация"),
-        "page": ("Номер страницы или кадра.", "Полезно для файлов"),
-        "search_tags": ("Теги поиска или запроса.", "Пост и публикация"),
+        "category": (_txt(language, "Категория или сайт, через который идет загрузка.", "Category or site name used by the extractor."), _txt(language, "Полезно для папок", "Useful for folders")),
+        "service": (_txt(language, "Источник внутри сервиса, например patreon или fanbox.", "Source inside a service, for example patreon or fanbox."), _txt(language, "Пост и публикация", "Post and publication")),
+        "subcategory": (_txt(language, "Подкатегория или подтип источника.", "Source subcategory or subtype."), _txt(language, "Служебные", "Technical")),
+        "title": (_txt(language, "Название поста, галереи или записи.", "Post, gallery, or entry title."), _txt(language, "Пост и публикация", "Post and publication")),
+        "date": (_txt(language, "Дата публикации в формате даты и времени.", "Publication date as a datetime value."), _txt(language, "Пост и публикация", "Post and publication")),
+        "published": (_txt(language, "Дата публикации как исходная строка сервиса.", "Publication date as the raw service string."), _txt(language, "Пост и публикация", "Post and publication")),
+        "id": (_txt(language, "Уникальный идентификатор поста или объекта.", "Unique post or object identifier."), _txt(language, "Пост и публикация", "Post and publication")),
+        "user": (_txt(language, "Идентификатор автора или профиля.", "Author or profile identifier."), _txt(language, "Автор и профиль", "Author and profile")),
+        "username": (_txt(language, "Имя автора, если сервис отдает его отдельно.", "Author name, if the service provides it separately."), _txt(language, "Автор и профиль", "Author and profile")),
+        "count": (_txt(language, "Количество файлов или вложений внутри поста.", "Number of files or attachments inside the post."), _txt(language, "Пост и публикация", "Post and publication")),
+        "filename": (_txt(language, "Имя файла без расширения.", "File name without extension."), _txt(language, "Полезно для файлов", "Useful for files")),
+        "extension": (_txt(language, "Расширение файла без точки.", "File extension without the dot."), _txt(language, "Полезно для файлов", "Useful for files")),
+        "name": (_txt(language, "Полное имя файла, обычно с расширением.", "Full file name, usually with extension."), _txt(language, "Полезно для файлов", "Useful for files")),
+        "num": (_txt(language, "Порядковый номер файла в посте или галерее.", "Sequential file number inside the post or gallery."), _txt(language, "Полезно для файлов", "Useful for files")),
+        "path": (_txt(language, "Внутренний путь файла на сервере источника.", "Internal file path on the source server."), _txt(language, "Вложения и файлы", "Attachments and files")),
+        "url": (_txt(language, "Прямая ссылка на файл или вложение.", "Direct link to the file or attachment."), _txt(language, "Вложения и файлы", "Attachments and files")),
+        "hash": (_txt(language, "Хэш или служебный идентификатор содержимого.", "Hash or internal content identifier."), _txt(language, "Вложения и файлы", "Attachments and files")),
+        "substring": (_txt(language, "Служебная часть совпадения URL у extractor-а.", "Technical substring from the extractor URL match."), _txt(language, "Служебные", "Technical")),
+        "_now": (_txt(language, "Текущее время на момент запуска задачи.", "Current time when the task starts."), _txt(language, "Служебные", "Technical")),
+        "manga": (_txt(language, "Название манги или серии.", "Manga or series title."), _txt(language, "Пост и публикация", "Post and publication")),
+        "chapter": (_txt(language, "Номер или название главы.", "Chapter number or title."), _txt(language, "Пост и публикация", "Post and publication")),
+        "page": (_txt(language, "Номер страницы или кадра.", "Page or frame number."), _txt(language, "Полезно для файлов", "Useful for files")),
+        "search_tags": (_txt(language, "Теги поиска или запроса.", "Search or query tags."), _txt(language, "Пост и публикация", "Post and publication")),
     }
     if name in exact:
         return exact[name]
@@ -470,32 +525,35 @@ def describe_keyword(name: str) -> tuple[str, str]:
     if name.startswith("user_profile["):
         suffix = name[len("user_profile["):-1]
         return (
-            f"Поле профиля автора: {suffix}. Обычно это дополнительные сведения об аккаунте.",
-            "Автор и профиль",
+            _txt(language, f"Поле профиля автора: {suffix}. Обычно это дополнительные сведения об аккаунте.", f"Author profile field: {suffix}. Usually this is extra account metadata."),
+            _txt(language, "Автор и профиль", "Author and profile"),
         )
 
     if name.startswith("attachments["):
         suffix = name.split("]", 1)[-1].lstrip("[").rstrip("]")
         return (
-            f"Свойство одного из вложений поста: {suffix or 'поле вложения'}.",
-            "Вложения и файлы",
+            _txt(language, f"Свойство одного из вложений поста: {suffix or 'поле вложения'}.", f"Property of one of the post attachments: {suffix or 'attachment field'}."),
+            _txt(language, "Вложения и файлы", "Attachments and files"),
         )
 
     if name.startswith("file["):
         suffix = name[len("file["):-1]
         return (
-            f"Свойство текущего файла или основного вложения: {suffix}.",
-            "Вложения и файлы",
+            _txt(language, f"Свойство текущего файла или основного вложения: {suffix}.", f"Property of the current file or main attachment: {suffix}."),
+            _txt(language, "Вложения и файлы", "Attachments and files"),
         )
 
     if name.startswith("user["):
         suffix = name[len("user["):-1]
         return (
-            f"Поле автора или пользователя: {suffix}.",
-            "Автор и профиль",
+            _txt(language, f"Поле автора или пользователя: {suffix}.", f"Author or user field: {suffix}."),
+            _txt(language, "Автор и профиль", "Author and profile"),
         )
 
-    return ("Техническое поле extractor-а, зависит от конкретного сайта.", "Служебные")
+    return (
+        _txt(language, "Техническое поле extractor-а, зависит от конкретного сайта.", "Technical extractor field that depends on the specific site."),
+        _txt(language, "Служебные", "Technical"),
+    )
 
 
 def _stringify_keyword_sample(value: object) -> str:

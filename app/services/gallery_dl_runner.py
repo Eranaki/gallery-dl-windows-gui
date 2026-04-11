@@ -38,9 +38,10 @@ class GalleryDlRunner(QObject):
     queue_state_changed = Signal(bool)
     current_task_changed = Signal(object)
 
-    def __init__(self, gallery_dl_path: str) -> None:
+    def __init__(self, gallery_dl_path: str, language: str = "ru") -> None:
         super().__init__()
         self._gallery_dl_path = gallery_dl_path
+        self._language = language if language in {"ru", "en"} else "ru"
         self._queue: deque[DownloadTask] = deque()
         self._current_task: DownloadTask | None = None
         self._stop_requested = False
@@ -51,13 +52,19 @@ class GalleryDlRunner(QObject):
         self._process.finished.connect(self._handle_finished)
         self._process.errorOccurred.connect(self._handle_process_error)
 
+    def _txt(self, ru: str, en: str) -> str:
+        return ru if self._language == "ru" else en
+
     def set_gallery_dl_path(self, gallery_dl_path: str) -> None:
         self._gallery_dl_path = gallery_dl_path
+
+    def set_language(self, language: str) -> None:
+        self._language = language if language in {"ru", "en"} else "ru"
 
     def inspect_keywords(self, url: str) -> tuple[bool, str]:
         command = self._resolve_command()
         if command is None:
-            return False, "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043d\u0430\u0439\u0442\u0438 gallery-dl."
+            return False, self._txt("Не удалось найти gallery-dl.", "Could not find gallery-dl.")
 
         try:
             result = subprocess.run(
@@ -78,12 +85,15 @@ class GalleryDlRunner(QObject):
             return True, output
         if error_output:
             return False, error_output
-        return False, output or "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u043b\u0435\u0439."
+        return False, output or self._txt(
+            "Не удалось получить список полей.",
+            "Could not get the keyword list.",
+        )
 
     def enqueue(self, tasks: list[DownloadTask]) -> None:
         for task in tasks:
             task.status = TaskStatus.QUEUED
-            task.progress_text = "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435"
+            task.progress_text = self._txt("Ожидание", "Waiting")
             self._queue.append(task)
             self.task_changed.emit(task)
         self.queue_state_changed.emit(bool(self._queue or self._current_task))
@@ -94,8 +104,11 @@ class GalleryDlRunner(QObject):
             return
         self._stop_requested = True
         self._current_task.status = TaskStatus.CANCELLED
-        self._current_task.progress_text = "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e"
-        self._current_task.last_message = "\u0417\u0430\u0434\u0430\u0447\u0430 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0430 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u043c."
+        self._current_task.progress_text = self._txt("Остановлено", "Stopped")
+        self._current_task.last_message = self._txt(
+            "Задача остановлена пользователем.",
+            "The task was stopped by the user.",
+        )
         self.task_changed.emit(self._current_task)
         self._process.kill()
 
@@ -105,7 +118,7 @@ class GalleryDlRunner(QObject):
 
         task = self._queue.popleft()
         task.status = TaskStatus.RUNNING
-        task.progress_text = "\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430"
+        task.progress_text = self._txt("Подготовка", "Preparing")
         self._current_task = task
         self.task_changed.emit(task)
         self.current_task_changed.emit(task)
@@ -113,10 +126,10 @@ class GalleryDlRunner(QObject):
         command = self._resolve_command()
         if command is None:
             task.status = TaskStatus.ERROR
-            task.progress_text = "\u041e\u0448\u0438\u0431\u043a\u0430"
-            task.last_message = (
-                f"\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043d\u0430\u0439\u0442\u0438 gallery-dl \u043f\u043e \u043f\u0443\u0442\u0438 '{self._gallery_dl_path}'. "
-                "\u041f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u043b\u043e PATH, \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 .venv \u0438 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 Python."
+            task.progress_text = self._txt("Ошибка", "Error")
+            task.last_message = self._txt(
+                f"Не удалось найти gallery-dl по пути '{self._gallery_dl_path}'. Приложение проверило PATH, локальный .venv и текущий Python.",
+                f"Could not find gallery-dl at '{self._gallery_dl_path}'. The app checked PATH, the local .venv, and the current Python.",
             )
             self.task_output.emit(task.id, task.last_message, "stderr")
             self.task_changed.emit(task)
@@ -348,11 +361,17 @@ class GalleryDlRunner(QObject):
         if self._current_task is None:
             return
         if self._current_task.mode is TaskMode.DOWNLOAD:
-            self._current_task.progress_text = "\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435"
-            self._current_task.last_message = "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u0430. \u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435 \u043e\u0442\u0432\u0435\u0442\u0430 \u043e\u0442 gallery-dl..."
+            self._current_task.progress_text = self._txt("Скачивание", "Downloading")
+            self._current_task.last_message = self._txt(
+                "Загрузка запущена. Ожидание ответа от gallery-dl...",
+                "Download started. Waiting for a response from gallery-dl...",
+            )
         else:
-            self._current_task.progress_text = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430"
-            self._current_task.last_message = "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0437\u0430\u043f\u0443\u0449\u0435\u043d\u0430."
+            self._current_task.progress_text = self._txt("Проверка", "Checking")
+            self._current_task.last_message = self._txt(
+                "Проверка запущена.",
+                "Check started.",
+            )
         self.task_changed.emit(self._current_task)
 
     def _handle_stdout(self) -> None:
@@ -364,7 +383,7 @@ class GalleryDlRunner(QObject):
             if not clean:
                 continue
             self._current_task.last_message = clean
-            self._current_task.progress_text = "\u0412\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f"
+            self._current_task.progress_text = self._txt("Выполняется", "Running")
             self.task_output.emit(self._current_task.id, clean, "stdout")
             self.task_changed.emit(self._current_task)
 
@@ -377,7 +396,7 @@ class GalleryDlRunner(QObject):
             if not clean:
                 continue
             self._current_task.last_message = clean
-            self._current_task.progress_text = "\u0412\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f"
+            self._current_task.progress_text = self._txt("Выполняется", "Running")
             self.task_output.emit(self._current_task.id, clean, "stderr")
             self.task_changed.emit(self._current_task)
 
@@ -387,7 +406,7 @@ class GalleryDlRunner(QObject):
         if self._current_task.status is TaskStatus.CANCELLED and self._stop_requested:
             return
         self._current_task.status = TaskStatus.ERROR
-        self._current_task.progress_text = "\u041e\u0448\u0438\u0431\u043a\u0430 \u0437\u0430\u043f\u0443\u0441\u043a\u0430"
+        self._current_task.progress_text = self._txt("Ошибка запуска", "Launch error")
         self._current_task.last_message = f"QProcess error: {error}"
         self.task_output.emit(self._current_task.id, self._current_task.last_message, "stderr")
         self.task_changed.emit(self._current_task)
@@ -399,19 +418,25 @@ class GalleryDlRunner(QObject):
         task.exit_code = exit_code
 
         if task.status is TaskStatus.CANCELLED:
-            task.progress_text = "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e"
+            task.progress_text = self._txt("Остановлено", "Stopped")
             if not task.last_message:
-                task.last_message = "\u0417\u0430\u0434\u0430\u0447\u0430 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0430."
+                task.last_message = self._txt("Задача остановлена.", "Task stopped.")
         elif exit_code == 0:
             task.status = TaskStatus.SUCCESS
-            task.progress_text = "\u0413\u043e\u0442\u043e\u0432\u043e"
+            task.progress_text = self._txt("Готово", "Done")
             if not task.last_message:
-                task.last_message = "\u041a\u043e\u043c\u0430\u043d\u0434\u0430 \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0430\u0441\u044c \u0443\u0441\u043f\u0435\u0448\u043d\u043e."
+                task.last_message = self._txt(
+                    "Команда завершилась успешно.",
+                    "The command finished successfully.",
+                )
         else:
             task.status = TaskStatus.ERROR
-            task.progress_text = "\u041e\u0448\u0438\u0431\u043a\u0430"
+            task.progress_text = self._txt("Ошибка", "Error")
             if not task.last_message:
-                task.last_message = f"gallery-dl \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u043b\u0441\u044f \u0441 \u043a\u043e\u0434\u043e\u043c {exit_code}."
+                task.last_message = self._txt(
+                    f"gallery-dl завершился с кодом {exit_code}.",
+                    f"gallery-dl exited with code {exit_code}.",
+                )
 
         self.task_changed.emit(task)
         self._finish_task()

@@ -13,9 +13,10 @@ class TaskMode(str, Enum):
     CHECK = "check"
     DOWNLOAD = "download"
 
-    @property
-    def label(self) -> str:
-        return "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430" if self is TaskMode.CHECK else "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430"
+    def label(self, language: str = "ru") -> str:
+        if language == "en":
+            return "Check" if self is TaskMode.CHECK else "Download"
+        return "Проверка" if self is TaskMode.CHECK else "Загрузка"
 
 
 class TaskStatus(str, Enum):
@@ -25,14 +26,22 @@ class TaskStatus(str, Enum):
     ERROR = "error"
     CANCELLED = "cancelled"
 
-    @property
-    def label(self) -> str:
+    def label(self, language: str = "ru") -> str:
+        if language == "en":
+            labels = {
+                TaskStatus.QUEUED: "Queued",
+                TaskStatus.RUNNING: "Running",
+                TaskStatus.SUCCESS: "Done",
+                TaskStatus.ERROR: "Error",
+                TaskStatus.CANCELLED: "Stopped",
+            }
+            return labels[self]
         labels = {
-            TaskStatus.QUEUED: "\u0412 \u043e\u0447\u0435\u0440\u0435\u0434\u0438",
-            TaskStatus.RUNNING: "\u0412\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f",
-            TaskStatus.SUCCESS: "\u0413\u043e\u0442\u043e\u0432\u043e",
-            TaskStatus.ERROR: "\u041e\u0448\u0438\u0431\u043a\u0430",
-            TaskStatus.CANCELLED: "\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u043e",
+            TaskStatus.QUEUED: "В очереди",
+            TaskStatus.RUNNING: "Выполняется",
+            TaskStatus.SUCCESS: "Готово",
+            TaskStatus.ERROR: "Ошибка",
+            TaskStatus.CANCELLED: "Остановлено",
         }
         return labels[self]
 
@@ -85,7 +94,7 @@ class DownloadTask:
     created_at: datetime = field(default_factory=datetime.now)
     status: TaskStatus = TaskStatus.QUEUED
     site: str = ""
-    progress_text: str = "\u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435"
+    progress_text: str = "Ожидание"
     last_message: str = ""
     exit_code: int | None = None
     log_file_path: str = ""
@@ -113,7 +122,7 @@ class DownloadTask:
         host = parsed.netloc.lower()
         if host.startswith("www."):
             host = host[4:]
-        return host or "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e"
+        return host or "unknown"
 
     def _build_log_file_path(self) -> str:
         base_dir = Path(self.options.destination) / "gallery-dl-logs"

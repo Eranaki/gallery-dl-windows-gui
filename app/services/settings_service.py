@@ -11,6 +11,7 @@ DEFAULT_POST_DIRECTORY_TEMPLATE = "{category}/{service}/{user}/{title}"
 
 @dataclass(slots=True)
 class AppSettings:
+    language: str = "ru"
     gallery_dl_path: str = "gallery-dl"
     default_download_dir: str = str(Path.home() / "Downloads")
     recent_destinations: list[str] = field(default_factory=list)
@@ -65,6 +66,13 @@ class SettingsService:
         payload["recent_destinations"] = normalized_recent_destinations
         if recent_destinations != normalized_recent_destinations:
             mutated = True
+
+        language = str(payload.get("language", "ru")).strip().lower()
+        if language not in {"ru", "en"}:
+            payload["language"] = "ru"
+            mutated = True
+        else:
+            payload["language"] = language
 
         directory_template = str(payload.get("naming_directory_template", "")).strip()
         if (
