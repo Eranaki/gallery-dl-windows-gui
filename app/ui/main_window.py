@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,11 +30,11 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QTextEdit,
     QToolButton,
     QTreeWidget,
@@ -213,6 +213,8 @@ class MainWindow(QMainWindow):
         self.supported_sites_payload: SupportedSitesPayload | None = None
         self._supported_sites_refresh_active = False
         self._supported_sites_thread: threading.Thread | None = None
+        self.history_dialog: QDialog | None = None
+        self.history_dialog_table: QTableWidget | None = None
         self._download_poll_timer = QTimer(self)
         self._download_poll_timer.setInterval(1500)
         self._download_poll_timer.timeout.connect(self._poll_active_download_progress)
@@ -229,19 +231,11 @@ class MainWindow(QMainWindow):
         self._initialize_supported_sites()
 
     def _build_ui(self) -> None:
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
-
         self.downloads_tab = QWidget()
-        self.history_tab = QWidget()
-        self.settings_tab = QWidget()
-        self.tabs.addTab(self.downloads_tab, "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0438")
-        self.tabs.addTab(self.history_tab, "\u0418\u0441\u0442\u043e\u0440\u0438\u044f")
-        self.tabs.addTab(self.settings_tab, "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
+        self.setCentralWidget(self.downloads_tab)
 
         self._build_downloads_tab()
-        self._build_history_tab()
-        self._build_settings_tab()
+        self._build_hidden_history_storage()
         self._build_advanced_dock()
         self._build_supported_sites_dock()
         self.tabifyDockWidget(self.advanced_dock, self.supported_sites_dock)
@@ -404,6 +398,7 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("\u041e\u0442\u043c\u0435\u043d\u0438\u0442\u044c")
         self.cancel_button.setEnabled(False)
         self.supported_sites_button = QPushButton("\u041f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0435 \u0441\u0430\u0439\u0442\u044b")
+        self.history_button = QPushButton("\u0418\u0441\u0442\u043e\u0440\u0438\u044f")
         self.advanced_button = QPushButton("\u0415\u0449\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
 
         self.check_button.setMinimumHeight(44)
@@ -424,6 +419,7 @@ class MainWindow(QMainWindow):
         secondary_actions_layout = QHBoxLayout()
         secondary_actions_layout.setSpacing(8)
         secondary_actions_layout.addWidget(self.supported_sites_button)
+        secondary_actions_layout.addWidget(self.history_button)
         secondary_actions_layout.addWidget(self.advanced_button)
 
         actions_layout = QVBoxLayout()
@@ -492,9 +488,7 @@ class MainWindow(QMainWindow):
         self.splitter.setStretchFactor(1, 2)
         root.addWidget(self.splitter, 1)
 
-    def _build_history_tab(self) -> None:
-        layout = QVBoxLayout(self.history_tab)
-        layout.setContentsMargins(12, 12, 12, 12)
+    def _build_hidden_history_storage(self) -> None:
         self.history_table = QTableWidget(0, 5)
         self.history_table.setHorizontalHeaderLabels(
             [
@@ -516,37 +510,28 @@ class MainWindow(QMainWindow):
         self.history_table.setColumnWidth(2, 120)
         self.history_table.setColumnWidth(3, 130)
         self.history_table.setColumnWidth(4, 420)
-        layout.addWidget(self.history_table)
 
-    def _build_settings_tab(self) -> None:
-        layout = QVBoxLayout(self.settings_tab)
-        layout.setContentsMargins(12, 12, 12, 12)
-
-        general_group = QGroupBox("\u041e\u0431\u0449\u0438\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
-        form = QFormLayout(general_group)
-        self.gallery_dl_path_edit = QLineEdit(self.app_settings.gallery_dl_path)
-        self.gallery_dl_path_button = QPushButton("\u041e\u0431\u0437\u043e\u0440")
-        path_widget = QWidget()
-        path_layout = QHBoxLayout(path_widget)
-        path_layout.setContentsMargins(0, 0, 0, 0)
-        path_layout.addWidget(self.gallery_dl_path_edit, 1)
-        path_layout.addWidget(self.gallery_dl_path_button)
-
-        self.default_folder_edit = QLineEdit(self.app_settings.default_download_dir)
-        self.default_folder_button = QPushButton("\u041e\u0431\u0437\u043e\u0440")
-        folder_widget = QWidget()
-        folder_layout = QHBoxLayout(folder_widget)
-        folder_layout.setContentsMargins(0, 0, 0, 0)
-        folder_layout.addWidget(self.default_folder_edit, 1)
-        folder_layout.addWidget(self.default_folder_button)
-
-        form.addRow("\u041f\u0443\u0442\u044c \u043a gallery-dl:", path_widget)
-        form.addRow("\u041f\u0430\u043f\u043a\u0430 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e:", folder_widget)
-
-        self.save_settings_button = QPushButton("\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
-        layout.addWidget(general_group)
-        layout.addWidget(self.save_settings_button, 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addStretch(1)
+    def _configure_history_table(self, table: QTableWidget) -> None:
+        table.setHorizontalHeaderLabels(
+            [
+                "URL",
+                "\u0421\u0430\u0439\u0442",
+                "\u0420\u0435\u0436\u0438\u043c",
+                "\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442",
+                "\u041a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0439",
+            ]
+        )
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(False)
+        for index in range(5):
+            table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+        table.setColumnWidth(0, 320)
+        table.setColumnWidth(1, 140)
+        table.setColumnWidth(2, 120)
+        table.setColumnWidth(3, 130)
+        table.setColumnWidth(4, 420)
 
     def _build_advanced_dock(self) -> None:
         self.advanced_dock = QDockWidget("\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", self)
@@ -558,11 +543,17 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.advanced_dock)
         self.advanced_dock.hide()
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
         container = QWidget()
         layout = QVBoxLayout(container)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
-        auth_group = QGroupBox("\u0412\u0445\u043e\u0434")
-        auth_form = QFormLayout(auth_group)
+        auth_content = QWidget()
+        auth_form = QFormLayout(auth_content)
         self.username_edit = QLineEdit()
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -580,14 +571,65 @@ class MainWindow(QMainWindow):
         auth_form.addRow("Cookies \u0444\u0430\u0439\u043b:", cookies_widget)
         auth_form.addRow("Cookies \u0438\u0437 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430:", self.browser_cookies_edit)
 
-        filters_group = QGroupBox("\u0424\u0438\u043b\u044c\u0442\u0440\u044b")
-        filters_form = QFormLayout(filters_group)
+        filters_content = QWidget()
+        filters_form = QFormLayout(filters_content)
+        self.date_before_edit = QLineEdit()
+        self.date_before_edit.setPlaceholderText("2026-12-31")
         self.date_after_edit = QLineEdit()
         self.date_after_edit.setPlaceholderText("2026-01-01")
+        self.filesize_min_edit = QLineEdit()
+        self.filesize_min_edit.setPlaceholderText("500k")
+        self.filesize_max_edit = QLineEdit()
+        self.filesize_max_edit.setPlaceholderText("2.5M")
+        filters_form.addRow("\u0414\u0430\u0442\u0430 \u0434\u043e:", self.date_before_edit)
         filters_form.addRow("\u0414\u0430\u0442\u0430 \u043f\u043e\u0441\u043b\u0435:", self.date_after_edit)
+        filters_form.addRow("\u0420\u0430\u0437\u043c\u0435\u0440 \u043e\u0442:", self.filesize_min_edit)
+        filters_form.addRow("\u0420\u0430\u0437\u043c\u0435\u0440 \u0434\u043e:", self.filesize_max_edit)
 
-        naming_group = QGroupBox("\u0418\u043c\u0435\u043d\u0430 \u0444\u0430\u0439\u043b\u043e\u0432")
-        naming_form = QFormLayout(naming_group)
+        post_content = QWidget()
+        post_form = QFormLayout(post_content)
+        self.write_metadata_check = QCheckBox("\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0442\u044c metadata (.json)")
+        self.write_info_json_check = QCheckBox("\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0442\u044c info.json")
+        self.write_tags_check = QCheckBox("\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0442\u044c \u0442\u0435\u0433\u0438")
+        self.archive_combo = QComboBox()
+        self.archive_combo.addItems(["\u041d\u0435\u0442", "ZIP", "CBZ"])
+        self.ugoira_combo = QComboBox()
+        self.ugoira_combo.addItems(["\u041d\u0435\u0442", "WEBM", "MP4", "GIF", "Copy", "ZIP"])
+        post_form.addRow(self.write_metadata_check)
+        post_form.addRow(self.write_info_json_check)
+        post_form.addRow(self.write_tags_check)
+        post_form.addRow("\u0423\u043f\u0430\u043a\u043e\u0432\u0430\u0442\u044c:", self.archive_combo)
+        post_form.addRow("Ugoira:", self.ugoira_combo)
+
+        app_network_content = QWidget()
+        app_network_form = QFormLayout(app_network_content)
+        self.gallery_dl_path_edit = QLineEdit(self.app_settings.gallery_dl_path)
+        self.gallery_dl_path_button = QPushButton("\u041e\u0431\u0437\u043e\u0440")
+        path_widget = QWidget()
+        path_layout = QHBoxLayout(path_widget)
+        path_layout.setContentsMargins(0, 0, 0, 0)
+        path_layout.addWidget(self.gallery_dl_path_edit, 1)
+        path_layout.addWidget(self.gallery_dl_path_button)
+
+        self.default_folder_edit = QLineEdit(self.app_settings.default_download_dir)
+        self.default_folder_button = QPushButton("\u041e\u0431\u0437\u043e\u0440")
+        folder_widget = QWidget()
+        folder_layout = QHBoxLayout(folder_widget)
+        folder_layout.setContentsMargins(0, 0, 0, 0)
+        folder_layout.addWidget(self.default_folder_edit, 1)
+        folder_layout.addWidget(self.default_folder_button)
+
+        self.proxy_edit = QLineEdit()
+        self.retries_edit = QLineEdit()
+        self.timeout_edit = QLineEdit()
+        app_network_form.addRow("\u041f\u0443\u0442\u044c \u043a gallery-dl:", path_widget)
+        app_network_form.addRow("\u041f\u0430\u043f\u043a\u0430 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e:", folder_widget)
+        app_network_form.addRow("\u041f\u0440\u043e\u043a\u0441\u0438:", self.proxy_edit)
+        app_network_form.addRow("\u041f\u043e\u0432\u0442\u043e\u0440\u044b:", self.retries_edit)
+        app_network_form.addRow("\u0422\u0430\u0439\u043c\u0430\u0443\u0442:", self.timeout_edit)
+
+        expert_content = QWidget()
+        expert_form = QFormLayout(expert_content)
         self.filename_template_edit = QLineEdit(self.app_settings.naming_filename_template)
         self.filename_template_edit.setPlaceholderText("{filename}.{extension}")
         self.base_directory_edit = QLineEdit(self.app_settings.naming_base_directory)
@@ -602,44 +644,48 @@ class MainWindow(QMainWindow):
         self.path_remove_edit.setPlaceholderText("\\x00-\\x1f\\x7f")
         self.path_strip_edit = QLineEdit(self.app_settings.naming_path_strip)
         self.path_strip_edit.setPlaceholderText(". ")
-        naming_form.addRow("\u0428\u0430\u0431\u043b\u043e\u043d \u0438\u043c\u0435\u043d\u0438:", self.filename_template_edit)
-        naming_form.addRow("Base directory:", self.base_directory_edit)
-        naming_form.addRow("Path restrict:", self.path_restrict_edit)
-        naming_form.addRow("Path replace:", self.path_replace_edit)
-        naming_form.addRow("Path remove:", self.path_remove_edit)
-        naming_form.addRow("Path strip:", self.path_strip_edit)
+        expert_form.addRow("\u0421\u044b\u0440\u043e\u0439 \u0448\u0430\u0431\u043b\u043e\u043d \u0438\u043c\u0435\u043d\u0438:", self.filename_template_edit)
+        expert_form.addRow("Base directory:", self.base_directory_edit)
+        expert_form.addRow("Path restrict:", self.path_restrict_edit)
+        expert_form.addRow("Path replace:", self.path_replace_edit)
+        expert_form.addRow("Path remove:", self.path_remove_edit)
+        expert_form.addRow("Path strip:", self.path_strip_edit)
 
-        post_group = QGroupBox("\u041f\u043e\u0441\u043b\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438")
-        post_form = QFormLayout(post_group)
-        self.write_metadata_check = QCheckBox("\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0442\u044c metadata JSON")
-        self.write_info_json_check = QCheckBox("\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0442\u044c info.json")
-        self.write_tags_check = QCheckBox("\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0442\u044c \u0442\u0435\u0433\u0438")
-        self.archive_combo = QComboBox()
-        self.archive_combo.addItems(["\u041d\u0435 \u0443\u043f\u0430\u043a\u043e\u0432\u044b\u0432\u0430\u0442\u044c", "ZIP", "CBZ"])
-        self.ugoira_combo = QComboBox()
-        self.ugoira_combo.addItems(["\u041d\u0435 \u043a\u043e\u043d\u0432\u0435\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c", "webm", "mp4", "gif", "copy", "zip"])
-        post_form.addRow(self.write_metadata_check)
-        post_form.addRow(self.write_info_json_check)
-        post_form.addRow(self.write_tags_check)
-        post_form.addRow("\u0410\u0440\u0445\u0438\u0432:", self.archive_combo)
-        post_form.addRow("Ugoira:", self.ugoira_combo)
-
-        network_group = QGroupBox("\u0421\u0435\u0442\u044c")
-        network_form = QFormLayout(network_group)
-        self.proxy_edit = QLineEdit()
-        self.retries_edit = QLineEdit()
-        self.timeout_edit = QLineEdit()
-        network_form.addRow("\u041f\u0440\u043e\u043a\u0441\u0438:", self.proxy_edit)
-        network_form.addRow("\u041f\u043e\u0432\u0442\u043e\u0440\u044b:", self.retries_edit)
-        network_form.addRow("\u0422\u0430\u0439\u043c\u0430\u0443\u0442:", self.timeout_edit)
-
-        layout.addWidget(auth_group)
-        layout.addWidget(filters_group)
-        layout.addWidget(naming_group)
-        layout.addWidget(post_group)
-        layout.addWidget(network_group)
+        layout.addWidget(self._create_collapsible_section("\u0414\u043e\u0441\u0442\u0443\u043f", auth_content, expanded=False))
+        layout.addWidget(self._create_collapsible_section("\u0424\u0438\u043b\u044c\u0442\u0440\u044b", filters_content, expanded=True))
+        layout.addWidget(self._create_collapsible_section("\u041f\u043e\u0441\u043b\u0435 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438", post_content, expanded=True))
+        layout.addWidget(self._create_collapsible_section("\u041f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0438 \u0441\u0435\u0442\u044c", app_network_content, expanded=True))
+        layout.addWidget(self._create_collapsible_section("\u0414\u043b\u044f \u043e\u043f\u044b\u0442\u043d\u044b\u0445", expert_content, expanded=False))
+        self.save_settings_button = QPushButton("\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
+        layout.addWidget(self.save_settings_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addStretch(1)
-        self.advanced_dock.setWidget(container)
+        scroll.setWidget(container)
+        self.advanced_dock.setWidget(scroll)
+
+    def _create_collapsible_section(self, title: str, content: QWidget, *, expanded: bool) -> QWidget:
+        wrapper = QWidget()
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(4)
+
+        toggle = QToolButton()
+        toggle.setText(title)
+        toggle.setCheckable(True)
+        toggle.setChecked(expanded)
+        toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        toggle.setStyleSheet("font-weight: 600; text-align: left;")
+
+        content.setVisible(expanded)
+
+        def on_toggled(checked: bool) -> None:
+            content.setVisible(checked)
+            toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+
+        toggle.toggled.connect(on_toggled)
+        wrapper_layout.addWidget(toggle)
+        wrapper_layout.addWidget(content)
+        return wrapper
 
     def _build_supported_sites_dock(self) -> None:
         self.supported_sites_dock = QDockWidget("\u041f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0435 \u0441\u0430\u0439\u0442\u044b", self)
@@ -928,6 +974,7 @@ class MainWindow(QMainWindow):
         self.download_button.clicked.connect(lambda: self._queue_tasks(TaskMode.DOWNLOAD))
         self.cancel_button.clicked.connect(self.runner.stop_current)
         self.supported_sites_button.clicked.connect(self._toggle_supported_sites)
+        self.history_button.clicked.connect(self._open_history_window)
         self.advanced_button.clicked.connect(self._toggle_advanced)
         self.log_toggle_button.clicked.connect(self._toggle_log_panel)
 
@@ -988,6 +1035,55 @@ class MainWindow(QMainWindow):
         visible = self.log_panel.isVisible()
         self.log_panel.setVisible(not visible)
         self.log_toggle_button.setText("\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c" if visible else "\u0421\u043a\u0440\u044b\u0442\u044c")
+
+    def _open_history_window(self) -> None:
+        if self.history_dialog is None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("\u0418\u0441\u0442\u043e\u0440\u0438\u044f")
+            dialog.resize(1040, 560)
+            layout = QVBoxLayout(dialog)
+
+            table = QTableWidget(0, 5)
+            self._configure_history_table(table)
+            layout.addWidget(table, 1)
+
+            buttons_layout = QHBoxLayout()
+            clear_button = QPushButton("\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c")
+            close_button = QPushButton("\u0417\u0430\u043a\u0440\u044b\u0442\u044c")
+            buttons_layout.addWidget(clear_button)
+            buttons_layout.addStretch(1)
+            buttons_layout.addWidget(close_button)
+            layout.addLayout(buttons_layout)
+
+            clear_button.clicked.connect(self._clear_history_records)
+            close_button.clicked.connect(dialog.close)
+
+            self.history_dialog = dialog
+            self.history_dialog_table = table
+            self._rebuild_history_dialog_table()
+
+        self._rebuild_history_dialog_table()
+        self.history_dialog.show()
+        self.history_dialog.raise_()
+        self.history_dialog.activateWindow()
+
+    def _rebuild_history_dialog_table(self) -> None:
+        if self.history_dialog_table is None:
+            return
+        self.history_dialog_table.setRowCount(0)
+        for row in range(self.history_table.rowCount()):
+            self.history_dialog_table.insertRow(row)
+            for column in range(self.history_table.columnCount()):
+                source_item = self.history_table.item(row, column)
+                value = source_item.text() if source_item is not None else ""
+                self._set_table_item_text(self.history_dialog_table, row, column, value)
+
+    def _clear_history_records(self) -> None:
+        self.history_table.setRowCount(0)
+        if self.history_dialog_table is not None:
+            self.history_dialog_table.setRowCount(0)
+        self.history_rows.clear()
+        self.status_message.setText("\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u043e\u0447\u0438\u0449\u0435\u043d\u0430")
 
     def _sync_filename_state(self) -> None:
         use_original = self.use_original_filenames_check.isChecked()
@@ -1647,7 +1743,10 @@ class MainWindow(QMainWindow):
             base_directory=self.base_directory_edit.text().strip(),
             directory_template=self.naming_directory_edit.text().strip(),
             range_text=self.range_edit.text().strip(),
+            date_before=self.date_before_edit.text().strip(),
             date_after=self.date_after_edit.text().strip(),
+            filesize_min=self.filesize_min_edit.text().strip(),
+            filesize_max=self.filesize_max_edit.text().strip(),
             username=self.username_edit.text().strip(),
             password=self.password_edit.text(),
             cookies_file=self.cookies_file_edit.text().strip(),
@@ -1724,13 +1823,23 @@ class MainWindow(QMainWindow):
             task.status.label,
             task.last_message,
         ]
-        for column, value in enumerate(values):
-            item = self.history_table.item(row, column)
-            if item is None:
-                item = QTableWidgetItem()
-                self.history_table.setItem(row, column, item)
-            item.setText(value)
+        self._write_history_row(self.history_table, row, values)
+        if self.history_dialog_table is not None:
+            while self.history_dialog_table.rowCount() <= row:
+                self.history_dialog_table.insertRow(self.history_dialog_table.rowCount())
+            self._write_history_row(self.history_dialog_table, row, values)
         self._finalize_task_log(task)
+
+    def _write_history_row(self, table: QTableWidget, row: int, values: list[str]) -> None:
+        for column, value in enumerate(values):
+            self._set_table_item_text(table, row, column, value)
+
+    def _set_table_item_text(self, table: QTableWidget, row: int, column: int, value: str) -> None:
+        item = table.item(row, column)
+        if item is None:
+            item = QTableWidgetItem()
+            table.setItem(row, column, item)
+        item.setText(value)
 
     def _append_log(self, task_id: str, message: str, stream: str) -> None:
         task = self.tasks.get(task_id)

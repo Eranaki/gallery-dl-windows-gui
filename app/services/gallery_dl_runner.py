@@ -229,8 +229,14 @@ class GalleryDlRunner(QObject):
         if opts.range_text.strip():
             args.extend(["--range", opts.range_text.strip()])
 
+        if opts.date_before.strip():
+            args.extend(["--date-before", opts.date_before.strip()])
         if opts.date_after.strip():
             args.extend(["--date-after", opts.date_after.strip()])
+        if opts.filesize_min.strip():
+            args.extend(["--filesize-min", opts.filesize_min.strip()])
+        if opts.filesize_max.strip():
+            args.extend(["--filesize-max", opts.filesize_max.strip()])
 
         if opts.username.strip():
             args.extend(["-u", opts.username.strip()])
