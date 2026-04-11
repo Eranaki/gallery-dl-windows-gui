@@ -1,7 +1,7 @@
 [project]
 name = "gallery-dl-windows-gui"
 version = "0.1.0"
-description = "First MVP of a Windows GUI for gallery-dl"
+description = "Windows GUI for gallery-dl with portable EXE builds"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
