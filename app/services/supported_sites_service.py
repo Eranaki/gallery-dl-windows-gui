@@ -10,7 +10,13 @@ from urllib.request import Request, urlopen
 from app.models.supported_sites import SupportedSiteEntry, SupportedSitesPayload
 
 
-DEFAULT_SECTION = "\u041e\u0441\u043d\u043e\u0432\u043d\u044b\u0435 \u0441\u0430\u0439\u0442\u044b"
+DEFAULT_SECTION = "__main__"
+LEGACY_DEFAULT_SECTIONS = {
+    "",
+    DEFAULT_SECTION,
+    "Основные сайты",
+    "Main sites",
+}
 
 
 class _SupportedSitesTableParser(HTMLParser):
@@ -70,7 +76,15 @@ class SupportedSitesService:
             result = SupportedSitesPayload.from_dict(payload)
         except Exception:
             return None
-        return result if result.sites else None
+        if not result.sites:
+            return None
+        normalized = self._normalize_payload(result)
+        if normalized.to_dict() != result.to_dict():
+            try:
+                self._save_cache(normalized)
+            except Exception:
+                pass
+        return normalized
 
     def needs_refresh(self, payload: SupportedSitesPayload) -> bool:
         if not payload.fetched_at:
@@ -88,7 +102,7 @@ class SupportedSitesService:
         html = self._download_source()
         sites = self._parse_source(html)
         if not sites:
-            raise ValueError("GitHub \u0432\u0435\u0440\u043d\u0443\u043b \u043f\u0443\u0441\u0442\u043e\u0439 \u0441\u043f\u0438\u0441\u043e\u043a \u0441\u0430\u0439\u0442\u043e\u0432.")
+            raise ValueError("GitHub returned an empty site list.")
         payload = SupportedSitesPayload(
             sites=sites,
             fetched_at=datetime.now(timezone.utc).isoformat(),
@@ -132,7 +146,7 @@ class SupportedSitesService:
         current_section = DEFAULT_SECTION
         for row in parser.rows:
             if len(row) == 1 and row[0][1] >= 4:
-                current_section = row[0][0] or DEFAULT_SECTION
+                current_section = self._normalize_section(row[0][0])
                 continue
 
             texts = [text for text, _colspan in row]
@@ -146,21 +160,14 @@ class SupportedSitesService:
                 continue
 
             auth = self._normalize_auth(auth)
-            tooltip_text = self._build_tooltip(
-                name=name,
-                url=url,
-                capabilities=capabilities,
-                auth=auth,
-                section=current_section,
-            )
             entries.append(
                 SupportedSiteEntry(
                     name=name,
                     url=url,
                     capabilities=capabilities,
                     auth=auth,
-                    tooltip_text=tooltip_text,
-                    section=current_section,
+                    tooltip_text="",
+                    section=self._normalize_section(current_section),
                 )
             )
         return entries
@@ -169,21 +176,26 @@ class SupportedSitesService:
         cleaned = " ".join(auth.replace("\xa0", " ").split())
         return cleaned
 
-    def _build_tooltip(
-        self,
-        *,
-        name: str,
-        url: str,
-        capabilities: str,
-        auth: str,
-        section: str,
-    ) -> str:
-        lines = [
-            f"\u0421\u0430\u0439\u0442: {name}",
-            f"URL: {url or '-'}",
-            f"\u0412\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\u0438: {capabilities or '-'}",
-            f"\u0410\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u044f: {auth or '-'}",
+    def _normalize_section(self, section: str) -> str:
+        cleaned = " ".join(str(section).replace("\xa0", " ").split())
+        if cleaned in LEGACY_DEFAULT_SECTIONS:
+            return DEFAULT_SECTION
+        return cleaned
+
+    def _normalize_payload(self, payload: SupportedSitesPayload) -> SupportedSitesPayload:
+        normalized_sites = [
+            SupportedSiteEntry(
+                name=site.name,
+                url=site.url,
+                capabilities=site.capabilities,
+                auth=self._normalize_auth(site.auth),
+                tooltip_text="",
+                section=self._normalize_section(site.section),
+            )
+            for site in payload.sites
         ]
-        if section and section != DEFAULT_SECTION:
-            lines.append(f"\u0421\u0435\u043a\u0446\u0438\u044f: {section}")
-        return "\n".join(lines)
+        return SupportedSitesPayload(
+            sites=normalized_sites,
+            fetched_at=payload.fetched_at,
+            source_url=payload.source_url,
+        )

@@ -837,71 +837,6 @@ class MainWindow(QMainWindow):
         self.app_settings.recent_destinations = recent[:10]
         self._load_recent_destinations()
 
-    def _write_task_log_line(self, task: DownloadTask, line: str) -> None:
-        if not task.options.save_log or not task.log_file_path:
-            return
-        if task.id in self._failed_log_files:
-            return
-
-        log_path = Path(task.log_file_path)
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            if task.id not in self._initialized_log_files:
-                header = [
-                    f"Время запуска: {task.created_at.strftime('%d.%m.%Y %H:%M:%S')}",
-                    f"{self._txt('Режим', 'Mode')}: {task.mode.label(self.language)}",
-                    f"Сайт: {task.site}",
-                    f"URL: {task.url}",
-                    f"Папка: {task.target_folder}",
-                    "",
-                ]
-                log_path.write_text("\n".join(header), encoding="utf-8")
-                self._initialized_log_files.add(task.id)
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            with log_path.open("a", encoding="utf-8") as handle:
-                handle.write(f"[{timestamp}] {line}\n")
-        except Exception as exc:
-            self._failed_log_files.add(task.id)
-            self.log_output.appendPlainText(f"[Система] Не удалось записать лог задачи: {exc}")
-
-    def _finalize_task_log(self, task: DownloadTask) -> None:
-        if (
-            not task.options.save_log
-            or not task.log_file_path
-            or task.id in self._finalized_log_files
-            or task.id in self._failed_log_files
-        ):
-            return
-        summary = f"{self._txt('Итог', 'Summary')}: {task.status.label(self.language)}"
-        if task.last_message:
-            summary += f". {task.last_message}"
-        self._write_task_log_line(task, summary)
-        self._finalized_log_files.add(task.id)
-
-    def _format_size(self, value: int) -> str:
-        size = float(value)
-        units = ("Б", "КБ", "МБ", "ГБ")
-        for unit in units:
-            if size < 1024 or unit == units[-1]:
-                if unit == "Б":
-                    return f"{int(size)} {unit}"
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{int(value)} Б"
-
-    def _format_speed(self, value: float) -> str:
-        if value <= 0:
-            return "0 Б/с"
-        size = value
-        units = ("Б/с", "КБ/с", "МБ/с", "ГБ/с")
-        for unit in units:
-            if size < 1024 or unit == units[-1]:
-                if unit == "Б/с":
-                    return f"{int(size)} {unit}"
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{int(value)} Б/с"
-
     def _find_recent_partial_file(self, task: DownloadTask) -> Path | None:
         root = Path(task.target_folder)
         if not root.exists():
@@ -926,73 +861,6 @@ class MainWindow(QMainWindow):
                 newest_mtime = stat.st_mtime
                 newest_path = path
         return newest_path
-
-    def _render_current_task_banner(self, task: DownloadTask | None) -> None:
-        if task is None:
-            self.current_task_label.setText("\u041d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 \u0437\u0430\u0434\u0430\u0447\u0438")
-            self.current_task_progress.setRange(0, 1)
-            self.current_task_progress.setValue(0)
-            return
-
-        details = self._current_part_status or task.last_message or task.progress_text
-        self.current_task_label.setText(f"{task.mode.label(self.language)}: {task.title}\n{details}")
-        self.current_task_progress.setRange(0, 0)
-
-    def _poll_active_download_progress(self) -> None:
-        if self._current_task_id is None:
-            return
-        task = self.tasks.get(self._current_task_id)
-        if task is None or task.status is not TaskStatus.RUNNING or task.mode is not TaskMode.DOWNLOAD:
-            self._download_poll_timer.stop()
-            self._current_part_status = ""
-            self._current_part_path = ""
-            self._current_part_size = 0
-            self._current_part_timestamp = 0.0
-            return
-
-        part_path = self._find_recent_partial_file(task)
-        if part_path is None:
-            return
-
-        try:
-            stat = part_path.stat()
-        except OSError:
-            return
-
-        now = time.monotonic()
-        relative_path = part_path.name
-        try:
-            relative_path = str(part_path.relative_to(Path(task.target_folder)))
-        except ValueError:
-            relative_path = part_path.name
-
-        speed_text = ""
-        part_path_text = str(part_path)
-        if self._current_part_path == part_path_text and self._current_part_timestamp:
-            delta_size = stat.st_size - self._current_part_size
-            delta_time = now - self._current_part_timestamp
-            if delta_time > 0:
-                speed_text = self._format_speed(max(0, delta_size) / delta_time)
-
-        self._current_part_path = part_path_text
-        self._current_part_size = stat.st_size
-        self._current_part_timestamp = now
-
-        message = f"\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442\u0441\u044f: {relative_path} ({self._format_size(stat.st_size)})"
-        if speed_text:
-            message = f"{message} • {speed_text}"
-        if message == self._current_part_status:
-            return
-
-        self._current_part_status = message
-        row = self.task_rows.get(task.id)
-        if row is not None:
-            item = self.queue_table.item(row, 5)
-            if item is None:
-                item = QTableWidgetItem()
-                self.queue_table.setItem(row, 5, item)
-            item.setText(message)
-        self._render_current_task_banner(task)
 
     def _selected_naming_compatibility(self) -> str:
         return str(self.path_compatibility_combo.currentData() or "auto")
@@ -1178,218 +1046,6 @@ class MainWindow(QMainWindow):
         self.status_message.setText(preset.description)
         self._update_naming_preview()
 
-    def _open_advanced_naming(self) -> None:
-        self.advanced_dock.show()
-        self.advanced_dock.raise_()
-        self.base_directory_edit.setFocus()
-
-    def _show_available_fields(self) -> None:
-        urls = [line.strip() for line in self.urls_edit.toPlainText().splitlines() if line.strip()]
-        if not urls:
-            self._show_keyword_browser_dialog(
-                entries=build_common_keyword_entries(),
-                note=(
-                    "Ссылка еще не указана, поэтому показан общий набор часто используемых полей. "
-                    "Когда ты добавишь URL, здесь появятся точные поля для конкретного сайта."
-                ),
-                raw_output="",
-            )
-            return
-
-        success, output = self.runner.inspect_keywords(urls[0])
-        if success:
-            entries = parse_gallery_dl_keywords(output)
-            if entries:
-                self._show_keyword_browser_dialog(
-                    entries=entries,
-                    note=(
-                        "Показаны поля, которые gallery-dl вернул для первой ссылки из списка. "
-                        "Их можно вставлять в шаблон папки или имени файла."
-                    ),
-                    raw_output=output,
-                )
-                return
-
-        note = (
-            "Не удалось получить точный список полей от gallery-dl. "
-            "Показан общий набор, который подходит для большинства сайтов."
-        )
-        if output:
-            note += "\n\nТехническое сообщение:\n" + output
-        self._show_keyword_browser_dialog(
-            entries=build_common_keyword_entries(urls[0]),
-            note=note,
-            raw_output=output,
-        )
-
-    def _show_keyword_browser_dialog(
-        self,
-        *,
-        entries: list[NamingKeywordEntry],
-        note: str,
-        raw_output: str,
-    ) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Доступные поля")
-        dialog.resize(1080, 680)
-
-        layout = QVBoxLayout(dialog)
-
-        note_label = QLabel(note)
-        note_label.setWordWrap(True)
-        note_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(note_label)
-
-        helper_label = QLabel(
-            "Выбери поле в списке ниже. Вставка идет в текущее место курсора в шаблоне."
-        )
-        helper_label.setStyleSheet("color: #555;")
-        helper_label.setWordWrap(True)
-        layout.addWidget(helper_label)
-
-        search_layout = QHBoxLayout()
-        search_layout.addWidget(QLabel("Поиск:"))
-        search_edit = QLineEdit()
-        search_edit.setPlaceholderText("Например: title, date, filename, user")
-        search_layout.addWidget(search_edit, 1)
-        layout.addLayout(search_layout)
-
-        tree = QTreeWidget()
-        tree.setColumnCount(4)
-        tree.setHeaderLabels(("Поле", "Пример", "Что означает", "Где использовать"))
-        tree.setAlternatingRowColors(True)
-        tree.setRootIsDecorated(True)
-        tree.setUniformRowHeights(False)
-        tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
-        tree.header().setStretchLastSection(False)
-        tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        tree.setColumnWidth(0, 240)
-        tree.setColumnWidth(1, 220)
-        tree.setColumnWidth(3, 150)
-        self._populate_keyword_tree(tree, entries)
-        layout.addWidget(tree, 1)
-
-        selected_group = QGroupBox("Выбранное поле")
-        selected_layout = QGridLayout(selected_group)
-        token_value = QLabel("Выбери поле в списке.")
-        token_value.setWordWrap(True)
-        token_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        description_value = QLabel("-")
-        description_value.setWordWrap(True)
-        description_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        selected_layout.addWidget(QLabel("Шаблон:"), 0, 0)
-        selected_layout.addWidget(token_value, 0, 1)
-        selected_layout.addWidget(QLabel("Пояснение:"), 1, 0)
-        selected_layout.addWidget(description_value, 1, 1)
-        layout.addWidget(selected_group)
-
-        buttons_layout = QHBoxLayout()
-        insert_directory_button = QPushButton("Вставить в папку")
-        insert_filename_button = QPushButton("Вставить в имя файла")
-        raw_button = QPushButton("Показать сырой вывод")
-        close_button = QPushButton("Закрыть")
-        insert_directory_button.setEnabled(False)
-        insert_filename_button.setEnabled(False)
-        raw_button.setEnabled(bool(raw_output.strip()))
-        buttons_layout.addWidget(insert_directory_button)
-        buttons_layout.addWidget(insert_filename_button)
-        buttons_layout.addStretch(1)
-        buttons_layout.addWidget(raw_button)
-        buttons_layout.addWidget(close_button)
-        layout.addLayout(buttons_layout)
-
-        def current_entry() -> NamingKeywordEntry | None:
-            item = tree.currentItem()
-            if item is None:
-                return None
-            entry = item.data(0, Qt.ItemDataRole.UserRole)
-            return entry if isinstance(entry, NamingKeywordEntry) else None
-
-        def sync_selection() -> None:
-            entry = current_entry()
-            has_entry = entry is not None
-            insert_directory_button.setEnabled(has_entry)
-            insert_filename_button.setEnabled(has_entry)
-            if not has_entry:
-                token_value.setText("Выбери поле в списке.")
-                description_value.setText("-")
-                return
-            token_value.setText(entry.template)
-            description_value.setText(
-                f"{entry.description}\n\nПример: {entry.sample}\nГде использовать: {entry.usage}"
-            )
-
-        def insert_into_directory() -> None:
-            entry = current_entry()
-            if entry is None:
-                return
-            self._insert_text_into_line_edit(self.naming_directory_edit, entry.template)
-            self.naming_directory_edit.setFocus()
-            self.status_message.setText(f"В шаблон папок вставлено {entry.template}")
-
-        def insert_into_filename() -> None:
-            entry = current_entry()
-            if entry is None:
-                return
-            if self.use_original_filenames_check.isChecked():
-                self.use_original_filenames_check.setChecked(False)
-            self._insert_text_into_line_edit(self.naming_filename_quick_edit, entry.template)
-            self.naming_filename_quick_edit.setFocus()
-            self.status_message.setText(f"В шаблон имени файла вставлено {entry.template}")
-
-        search_edit.textChanged.connect(lambda text: self._filter_keyword_tree(tree, text))
-        tree.currentItemChanged.connect(lambda _current, _previous: sync_selection())
-        insert_directory_button.clicked.connect(insert_into_directory)
-        insert_filename_button.clicked.connect(insert_into_filename)
-        raw_button.clicked.connect(
-            lambda: self._show_readonly_text_dialog("Сырой вывод gallery-dl", raw_output)
-        )
-        close_button.clicked.connect(dialog.close)
-
-        self._filter_keyword_tree(tree, "")
-        sync_selection()
-        dialog.exec()
-
-    def _populate_keyword_tree(
-        self,
-        tree: QTreeWidget,
-        entries: list[NamingKeywordEntry],
-    ) -> None:
-        tree.clear()
-        grouped: dict[str, list[NamingKeywordEntry]] = {group: [] for group in GROUP_ORDER}
-        for entry in entries:
-            grouped.setdefault(entry.group, []).append(entry)
-
-        for group_name in GROUP_ORDER:
-            group_entries = grouped.get(group_name, [])
-            if not group_entries:
-                continue
-            group_item = QTreeWidgetItem([group_name])
-            group_item.setFlags(group_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            group_item.setFirstColumnSpanned(True)
-            tree.addTopLevelItem(group_item)
-
-            for entry in group_entries:
-                item = QTreeWidgetItem(
-                    [
-                        entry.name,
-                        entry.sample,
-                        entry.description,
-                        entry.usage,
-                    ]
-                )
-                item.setData(0, Qt.ItemDataRole.UserRole, entry)
-                item.setToolTip(0, entry.template)
-                item.setToolTip(1, entry.sample)
-                item.setToolTip(2, entry.description)
-                item.setToolTip(3, entry.usage)
-                group_item.addChild(item)
-
-            group_item.setExpanded(group_name in {"Полезно для папок", "Полезно для файлов"})
-
     def _filter_keyword_tree(self, tree: QTreeWidget, text: str) -> None:
         query = text.strip().lower()
         first_visible_item: QTreeWidgetItem | None = None
@@ -1438,146 +1094,6 @@ class MainWindow(QMainWindow):
         buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dialog.close)
         layout.addWidget(buttons)
         dialog.exec()
-
-    def _update_naming_preview(self) -> None:
-        url = ""
-        for line in self.urls_edit.toPlainText().splitlines():
-            stripped = line.strip()
-            if stripped:
-                url = stripped
-                break
-
-        preview, error = build_path_preview(
-            destination=self._destination_text() or self.app_settings.default_download_dir,
-            url=url,
-            directory_template=self.naming_directory_edit.text().strip(),
-            filename_template=self.naming_filename_quick_edit.text().strip(),
-            use_original_filenames=self.use_original_filenames_check.isChecked(),
-            path_compatibility_mode=self.path_restrict_edit.text().strip() or self._selected_naming_compatibility(),
-            organize_by_site=self.organize_by_site_check.isChecked(),
-            base_directory=self.base_directory_edit.text().strip(),
-            path_replace=self.path_replace_edit.text(),
-            path_remove=self.path_remove_edit.text(),
-            path_strip=self.path_strip_edit.text(),
-        )
-        if error:
-            self.naming_preview_label.setText(f"\u041e\u0448\u0438\u0431\u043a\u0430 preview: {error}")
-            self.naming_preview_label.setStyleSheet("color: #b00020;")
-            return
-
-        self.naming_preview_label.setText(preview or "-")
-        self.naming_preview_label.setStyleSheet("")
-
-    def _initialize_supported_sites(self) -> None:
-        cached = self.supported_sites_service.load_cached()
-        if cached is not None:
-            self._apply_supported_sites_payload(cached)
-            self.supported_sites_status_label.setText(
-                "\u041f\u043e\u043a\u0430\u0437\u0430\u043d \u043a\u044d\u0448\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u0441\u043f\u0438\u0441\u043e\u043a \u0441\u0430\u0439\u0442\u043e\u0432."
-            )
-            if self.supported_sites_service.needs_refresh(cached):
-                QTimer.singleShot(0, lambda: self._start_supported_sites_refresh(manual=False))
-            return
-
-        self.supported_sites_status_label.setText(
-            "\u0421\u043f\u0438\u0441\u043e\u043a \u0441\u0430\u0439\u0442\u043e\u0432 \u0437\u0430\u0433\u0440\u0443\u0436\u0430\u0435\u0442\u0441\u044f \u0441 GitHub..."
-        )
-        QTimer.singleShot(0, lambda: self._start_supported_sites_refresh(manual=False))
-
-    def _start_supported_sites_refresh(self, *, manual: bool) -> None:
-        if self._supported_sites_refresh_active:
-            if manual:
-                self.supported_sites_status_label.setText(
-                    "\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0443\u0436\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f."
-                )
-            return
-
-        self._supported_sites_refresh_active = True
-        self.supported_sites_refresh_button.setEnabled(False)
-        self.supported_sites_status_label.setText(
-            "\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0445 \u0441\u0430\u0439\u0442\u043e\u0432..."
-        )
-
-        def worker() -> None:
-            try:
-                payload = self.supported_sites_service.fetch_latest()
-            except Exception as exc:
-                self.supported_sites_failed.emit(str(exc), manual)
-                return
-            self.supported_sites_loaded.emit(payload, manual)
-
-        self._supported_sites_thread = threading.Thread(target=worker, daemon=True)
-        self._supported_sites_thread.start()
-
-    def _on_supported_sites_loaded(self, payload: object, manual: bool) -> None:
-        self._supported_sites_refresh_active = False
-        self.supported_sites_refresh_button.setEnabled(True)
-
-        if not isinstance(payload, SupportedSitesPayload):
-            self._on_supported_sites_failed("\u041d\u0435\u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u044b\u0439 \u043e\u0442\u0432\u0435\u0442 \u043e\u0442 GitHub.", manual)
-            return
-
-        self._apply_supported_sites_payload(payload)
-        self.supported_sites_status_label.setText(
-            "\u0421\u043f\u0438\u0441\u043e\u043a \u0441\u0430\u0439\u0442\u043e\u0432 \u0430\u043a\u0442\u0443\u0430\u043b\u0435\u043d."
-        )
-        if manual:
-            self.status_message.setText(
-                "\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u043c\u044b\u0445 \u0441\u0430\u0439\u0442\u043e\u0432 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d"
-            )
-
-    def _on_supported_sites_failed(self, message: str, manual: bool) -> None:
-        self._supported_sites_refresh_active = False
-        self.supported_sites_refresh_button.setEnabled(True)
-
-        if self.supported_sites_payload is None:
-            self.supported_sites_status_label.setText(
-                "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a \u0441\u0430\u0439\u0442\u043e\u0432. "
-                "\u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0441\u0435\u0442\u044c \u0438\u043b\u0438 \u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439 \u043f\u043e\u0437\u0436\u0435."
-            )
-        else:
-            self.supported_sites_status_label.setText(
-                "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a. "
-                "\u041f\u043e\u043a\u0430\u0437\u0430\u043d \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043d\u044b\u0439 \u043a\u044d\u0448."
-            )
-
-        if manual:
-            self.status_message.setText(message)
-
-    def _apply_supported_sites_payload(self, payload: SupportedSitesPayload) -> None:
-        self.supported_sites_payload = payload
-        self.supported_sites_tree.clear()
-
-        section_items: dict[str, QTreeWidgetItem] = {}
-        first_site_item: QTreeWidgetItem | None = None
-
-        for site in payload.sites:
-            section_name = site.section or DEFAULT_SECTION
-            if section_name not in section_items:
-                section_item = QTreeWidgetItem([section_name])
-                section_item.setFlags(section_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                section_item.setToolTip(0, section_name)
-                self.supported_sites_tree.addTopLevelItem(section_item)
-                section_items[section_name] = section_item
-
-            item = QTreeWidgetItem([site.name])
-            item.setToolTip(0, site.tooltip_text)
-            item.setData(0, Qt.ItemDataRole.UserRole, site)
-            section_items[section_name].addChild(item)
-            if first_site_item is None:
-                first_site_item = item
-
-        if section_items:
-            next(iter(section_items.values())).setExpanded(True)
-
-        self.supported_sites_updated_label.setText(
-            "\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435: "
-            f"{self._format_timestamp(payload.fetched_at)}"
-        )
-        self._filter_supported_sites(self.supported_sites_search_edit.text())
-
-        if first_site_item is not None and self.supported_sites_tree.currentItem() is None:
-            self.supported_sites_tree.setCurrentItem(first_site_item)
 
     def _filter_supported_sites(self, text: str) -> None:
         query = text.strip().lower()
@@ -1628,6 +1144,24 @@ class MainWindow(QMainWindow):
 
         self._clear_supported_site_details()
 
+    def _supported_site_section_label(self, section: str) -> str:
+        normalized = (section or DEFAULT_SECTION).strip()
+        if normalized == DEFAULT_SECTION:
+            return self._txt("Основные сайты", "Main sites")
+        return normalized
+
+    def _build_supported_site_tooltip(self, entry: SupportedSiteEntry) -> str:
+        lines = [
+            f"{self._txt('Сайт', 'Site')}: {entry.name or '-'}",
+            f"URL: {entry.url or '-'}",
+            f"{self._txt('Возможности', 'Capabilities')}: {entry.capabilities or '-'}",
+            f"{self._txt('Авторизация', 'Authentication')}: {entry.auth or '-'}",
+        ]
+        section_label = self._supported_site_section_label(entry.section)
+        if section_label != self._txt("Основные сайты", "Main sites"):
+            lines.append(f"{self._txt('Секция', 'Section')}: {section_label}")
+        return "\n".join(lines)
+
     def _show_supported_site_details(self, entry: SupportedSiteEntry) -> None:
         self.site_name_value.setText(entry.name or "-")
         if entry.url:
@@ -1636,14 +1170,7 @@ class MainWindow(QMainWindow):
             self.site_url_value.setText("-")
         self.site_capabilities_value.setText(entry.capabilities or "-")
         self.site_auth_value.setText(entry.auth or "-")
-        self.site_section_value.setText(entry.section or DEFAULT_SECTION)
-
-    def _clear_supported_site_details(self) -> None:
-        self.site_name_value.setText("\u0412\u044b\u0431\u0435\u0440\u0438 \u0441\u0430\u0439\u0442 \u0438\u0437 \u0441\u043f\u0438\u0441\u043a\u0430.")
-        self.site_url_value.setText("-")
-        self.site_capabilities_value.setText("-")
-        self.site_auth_value.setText("-")
-        self.site_section_value.setText("-")
+        self.site_section_value.setText(self._supported_site_section_label(entry.section))
 
     def _format_timestamp(self, value: str) -> str:
         if not value:
@@ -1662,45 +1189,6 @@ class MainWindow(QMainWindow):
             return
         current = self.urls_edit.toPlainText().strip()
         self.urls_edit.setPlainText(current + "\n" + text if current else text)
-
-    def _choose_destination(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "\u0412\u044b\u0431\u0435\u0440\u0438 \u043f\u0430\u043f\u043a\u0443 \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0438",
-            self._destination_text() or self.default_folder_edit.text(),
-        )
-        if folder:
-            self._register_recent_destination(folder)
-            self.settings_service.save(self.app_settings)
-
-    def _choose_default_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "\u041f\u0430\u043f\u043a\u0430 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e",
-            self.default_folder_edit.text() or str(Path.home() / "Downloads"),
-        )
-        if folder:
-            self.default_folder_edit.setText(folder)
-
-    def _choose_gallery_dl_path(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "\u0423\u043a\u0430\u0436\u0438 \u043f\u0443\u0442\u044c \u043a gallery-dl",
-            str(Path.home()),
-            "\u0418\u0441\u043f\u043e\u043b\u043d\u044f\u0435\u043c\u044b\u0435 \u0444\u0430\u0439\u043b\u044b (*.exe);;\u0412\u0441\u0435 \u0444\u0430\u0439\u043b\u044b (*.*)",
-        )
-        if file_path:
-            self.gallery_dl_path_edit.setText(file_path)
-
-    def _choose_cookies_file(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "\u0412\u044b\u0431\u0435\u0440\u0438 cookies \u0444\u0430\u0439\u043b",
-            str(Path.home()),
-            "Text files (*.txt *.json);;All files (*.*)",
-        )
-        if file_path:
-            self.cookies_file_edit.setText(file_path)
 
     def _save_settings(self) -> None:
         self.app_settings = AppSettings(
@@ -2387,14 +1875,15 @@ class MainWindow(QMainWindow):
         for site in payload.sites:
             section_name = site.section or DEFAULT_SECTION
             if section_name not in section_items:
-                section_item = QTreeWidgetItem([section_name])
+                section_label = self._supported_site_section_label(section_name)
+                section_item = QTreeWidgetItem([section_label])
                 section_item.setFlags(section_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                section_item.setToolTip(0, section_name)
+                section_item.setToolTip(0, section_label)
                 self.supported_sites_tree.addTopLevelItem(section_item)
                 section_items[section_name] = section_item
 
             item = QTreeWidgetItem([site.name])
-            item.setToolTip(0, site.tooltip_text)
+            item.setToolTip(0, self._build_supported_site_tooltip(site))
             item.setData(0, Qt.ItemDataRole.UserRole, site)
             section_items[section_name].addChild(item)
             if first_site_item is None:
