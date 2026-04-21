@@ -86,7 +86,7 @@ Or directly:
 ### Branch model
 
 - `main` contains the stable version.
-- `test` is used for the next changes and experiments.
+- New development can continue in a separate test branch when needed, but releases are published from `main`.
 
 ## Limitations
 
@@ -184,7 +184,7 @@ py -3 -m pip install -e .[build]
 ### Модель веток
 
 - `main` хранит стабильную версию.
-- `test` используется для следующих изменений и экспериментов.
+- Новая разработка может продолжаться в отдельной тестовой ветке по мере необходимости, но релизы публикуются из `main`.
 
 ## Ограничения
 
