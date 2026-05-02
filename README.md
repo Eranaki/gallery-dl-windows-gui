@@ -15,6 +15,8 @@ Its goal is simple: make downloading from supported websites easier for people w
 
 Instead of assembling commands by hand, you can paste one or more URLs, choose a destination folder, configure file filters and naming rules, and run downloads from a visual interface.
 
+![Скриншот](Screen.png)
+
 ## What is gallery-dl?
 
 [`gallery-dl`](https://github.com/mikf/gallery-dl) is an open-source command-line downloader for many websites that host images, videos, posts, galleries, and similar media content.
